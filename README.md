@@ -1,41 +1,60 @@
 # elasticsearch-agent-observability
 
-A skill that gives an AI agent a black box in Elasticsearch and Kibana.
-It turns traces, tool calls, token usage, failures, and latency into a working observability surface instead of a pile of ad hoc scripts.
+Bootstrap observability for AI agents on Elasticsearch, OpenTelemetry, and Kibana.
+This skill inspects a workspace and generates the collection, storage, dashboard, and diagnostic assets needed to make an agent observable without hand-building the whole stack.
 
 ## Overview
 
-This skill bootstraps observability for AI agents on Elasticsearch, OpenTelemetry, and Kibana.
+Most agent projects can run before they can explain themselves.
+When latency climbs, token cost drifts, or failures appear, teams usually still lack a usable baseline for answering simple questions:
 
-It is designed for agents that already run model calls, tool calls, and MCP flows but still lack a usable observability baseline. Instead of hand-building OpenTelemetry Collector configuration, Elasticsearch data streams, ingest pipelines, lifecycle policies, Kibana dashboards, and drift checks, the skill generates the base layer as a working starter.
+- which model calls are slow
+- which tools fail most often
+- where token usage is going
+- whether the live cluster still matches the generated configuration
 
-After bootstrap, the workspace has a ready set of assets for collection, storage, visualization, diagnosis, and validation.
-
-## What the skill does
-
-- **Inspect the workspace**: detect runtime modules, model adapters, tool registries, and MCP surfaces
-- **Generate the collection layer**: output OpenTelemetry Collector configuration, environment files, and launch scripts
-- **Generate Elasticsearch assets**: output data streams, index templates, ingest pipelines, and lifecycle policies
-- **Generate Kibana assets**: output data views, saved searches, Lens visualizations, and an overview dashboard
-- **Diagnose failures**: detect error-rate spikes, latency regressions, and token anomalies, then produce RCA output
-- **Check drift**: compare the live Elasticsearch cluster with locally generated assets
-- **Archive conclusions**: write RCA results into `elasticsearch-insight-store`
-- **Support multiple ingest modes**: `collector`, `elastic-agent-fleet`, and `apm-otlp-hybrid`
+This skill builds that baseline.
+It turns a workspace into a ready observability starter for Elasticsearch and Kibana: OpenTelemetry Collector configuration, Elasticsearch assets, Kibana dashboards, alert diagnosis, and drift validation.
 
 ## Advantages
 
-- **It removes setup drag**: the agent does not need to hand-wire Collector configuration, Elasticsearch assets, and Kibana assets one by one.
-- **It fits the real debugging path**: bootstrap, diagnose, validate, and archive RCA all live in one skill instead of scattered scripts.
-- **It is built for agent systems**: it understands model calls, tool calls, MCP surfaces, token usage, and failure paths better than a generic Elasticsearch starter.
-- **It keeps the loop closed**: diagnosis output can go straight into `elasticsearch-insight-store`, so incident knowledge does not disappear after the fix.
-- **It is safe to operate**: credentials stay in environment variables by default, and the ingest pipeline redacts sensitive generative AI fields.
+- **Less setup drag**: the agent does not need to hand-wire OpenTelemetry Collector configuration, Elasticsearch assets, and Kibana assets one by one.
+- **One operational loop**: bootstrap, diagnose, validate, and archive RCA all live in one skill instead of scattered scripts.
+- **Built for agent systems**: the discovery flow understands model calls, tool calls, MCP surfaces, token usage, and agent failure paths better than a generic Elasticsearch starter.
+- **Closed knowledge loop**: diagnosis output can go straight into `elasticsearch-insight-store`, so incident knowledge does not disappear after the fix.
+- **Safe defaults**: credentials stay in environment variables by default, and the ingest pipeline redacts sensitive generative AI fields.
 
-## Why an agent would use it
+## What the skill generates
 
-An agent should not hand-build observability plumbing every time.
-This skill gives the agent one place to bootstrap, validate, and diagnose an Elasticsearch-based observability setup.
+- **Workspace discovery**: detect runtime modules, model adapters, tool registries, and MCP surfaces
+- **Collection layer**: OpenTelemetry Collector configuration, environment files, and launch scripts
+- **Elasticsearch assets**: data streams, component templates, index templates, ingest pipelines, and lifecycle policies
+- **Kibana assets**: data views, saved searches, Lens visualizations, and an overview dashboard
+- **Diagnosis flow**: alert checks for error-rate spikes, latency regressions, and token anomalies with RCA output
+- **Drift validation**: compare the live Elasticsearch cluster with locally generated assets
+- **Knowledge archival**: write RCA results into `elasticsearch-insight-store`
+- **Multiple ingest modes**: `collector`, `elastic-agent-fleet`, and `apm-otlp-hybrid`
 
-Use it when the request sounds like:
+## Installation
+
+This repository is designed to be used as a skill repository.
+Clone it into your agent's skill directory:
+
+```bash
+git clone https://github.com/kevin-codelab/elasticsearch-agent-observability.git <skill-dir>/elasticsearch-agent-observability
+```
+
+Any agent runtime that resolves `SKILL.md` can load this repository as a skill.
+
+## Compatibility
+
+- **CodeBuddy**
+- **Claude Code**
+- **OpenClaw** with a thin wrapper that points to the same scripts
+
+## When to use it
+
+Use this skill for requests like:
 
 - "add observability to this agent"
 - "set up OpenTelemetry, Elasticsearch, and Kibana for this workspace"
@@ -108,15 +127,43 @@ generated/bootstrap/
 └── bootstrap-summary.md
 ```
 
-## Extension points
-
-- **Dashboard extensions**: inject extra panels with `--dashboard-extensions`
-- **Knowledge loop**: archive RCA output into `elasticsearch-insight-store`
-- **Safe defaults**: keep credentials in environment variables and redact sensitive generative AI fields in the ingest pipeline
-
 ## Requirements
 
+- Python 3.10+
 - Elasticsearch 9.x
 - Kibana
 - `otelcol-contrib` with `spanmetrics` and the Elasticsearch exporter
 - Basic license is enough
+
+## Dependencies
+
+- **Repository scripts**: Python standard library only
+- **Generated instrumentation snippet**: install `opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-grpc` in the target agent project
+- **Optional auto-patching path**: if the target project wants auto-instrumented OpenAI or Anthropic calls, those SDKs must already exist in the target project
+
+## Development
+
+Run the test suite with:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+## Security model
+
+- Credentials stay in environment variables by default
+- Elasticsearch credentials are embedded into generated YAML only when explicitly requested
+- The ingest pipeline redacts sensitive generative AI fields
+- Generated files should still be reviewed before applying them to a live cluster
+
+## Contributing
+
+See `CONTRIBUTING.md` for contribution workflow and review expectations.
+
+## Security reporting
+
+See `SECURITY.md` for how to report vulnerabilities responsibly.
+
+## License
+
+Apache-2.0. See `LICENSE`.

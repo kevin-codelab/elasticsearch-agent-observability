@@ -25,8 +25,12 @@ Trigger for requests like:
 
 - “给这个 agent 建可观测能力”
 - “用 Elasticsearch 给当前 agent 接观测”
-- “帮我生成 OTel / ES / Kibana 这一套”
+- “帮我生成 OTel / Elasticsearch / Kibana 这一套”
 - “给某个 agent 准备 Collector、索引模板、ILM 和 Kibana 入口”
+- "add observability to this agent"
+- "set up OpenTelemetry, Elasticsearch, and Kibana for this workspace"
+- "generate the Collector, Elasticsearch, and Kibana assets"
+- "prepare drift checks and diagnosis for this agent"
 
 ## Preferred Operating Path
 
