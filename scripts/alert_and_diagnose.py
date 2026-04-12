@@ -63,6 +63,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--webhook-url", default="", help="Optional webhook URL for push notification")
     parser.add_argument("--write-to-es", action="store_true", help="Write alert results back to ES as a .alerts data stream")
     parser.add_argument("--generate-crontab", action="store_true", help="Print a crontab entry for scheduling this check")
+    parser.add_argument("--store-to-insight", default="", help="Path to elasticsearch-insight-store scripts/store.py for auto-storing RCA conclusions")
+    parser.add_argument("--insight-es-url", default="", help="ES URL for insight-store (defaults to --es-url)")
+    parser.add_argument("--insight-es-user", default="", help="ES user for insight-store (defaults to --es-user)")
+    parser.add_argument("--insight-es-password", default="", help="ES password for insight-store (defaults to --es-password)")
     return parser.parse_args()
 
 
@@ -274,6 +278,73 @@ def _write_alert_to_es(config: ESConfig, index_prefix: str, result: dict[str, An
             print(f"⚠️ failed to write alert status to ES: {exc}", file=sys.stderr)
 
 
+def _store_to_insight(*, store_script: str, result: dict[str, Any], es_url: str, es_user: str, es_password: str) -> None:
+    """Store each RCA conclusion into elasticsearch-insight-store."""
+    import subprocess
+    import tempfile
+
+    store_path = Path(store_script).expanduser().resolve()
+    if not store_path.exists():
+        print(f"⚠️ insight-store script not found: {store_path}", file=sys.stderr)
+        return
+
+    for alert in result.get("alerts", []):
+        title = f"[{alert['severity'].upper()}] {alert['alert_type']} — {result.get('checked_at', 'unknown')}"
+        content_lines = [
+            f"# {alert['alert_type']}",
+            "",
+            f"**Severity**: {alert['severity']}",
+            f"**Checked at**: {result.get('checked_at', 'unknown')}",
+            f"**Time range**: {result.get('time_range', 'unknown')}",
+            "",
+            "## Phenomenon",
+            "",
+            alert.get("phenomenon", ""),
+            "",
+            "## Root Cause",
+            "",
+            alert.get("root_cause", ""),
+            "",
+            "## Recommendation",
+            "",
+            alert.get("recommendation", ""),
+            "",
+            "## Evidence",
+            "",
+            f"```json\n{json.dumps(alert.get('evidence', {}), indent=2, ensure_ascii=False)}\n```",
+        ]
+        tags = f"alert,{alert['alert_type']},{alert['severity']}"
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as tmp:
+            tmp.write("\n".join(content_lines))
+            tmp_path = tmp.name
+
+        cmd = [
+            sys.executable, str(store_path),
+            "--es-url", es_url,
+        ]
+        if es_user:
+            cmd.extend(["--es-user", es_user])
+        if es_password:
+            cmd.extend(["--es-pass", es_password])
+        cmd.extend([
+            "store",
+            "--title", title,
+            "--tags", tags,
+            "--file", tmp_path,
+        ])
+
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=30)  # noqa: S603
+            print(f"   📝 RCA stored to insight-store: {title}")
+        except subprocess.CalledProcessError as exc:
+            print(f"⚠️ failed to store RCA to insight-store: {exc.stderr.decode('utf-8', errors='ignore')[:200]}", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️ insight-store call failed: {exc}", file=sys.stderr)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
 def _print_crontab(args: Any) -> None:
     """Print a ready-to-use crontab entry for scheduling this check."""
     cmd_parts = [
@@ -365,6 +436,14 @@ def main() -> int:
             _send_webhook(args.webhook_url, result)
         if args.write_to_es:
             _write_alert_to_es(config, args.index_prefix, result)
+        if args.store_to_insight and result["status"] == "alert":
+            _store_to_insight(
+                store_script=args.store_to_insight,
+                result=result,
+                es_url=args.insight_es_url or args.es_url,
+                es_user=args.insight_es_user or args.es_user,
+                es_password=args.insight_es_password or args.es_password,
+            )
         if args.generate_crontab:
             _print_crontab(args)
         return 0 if result["status"] == "ok" else 2

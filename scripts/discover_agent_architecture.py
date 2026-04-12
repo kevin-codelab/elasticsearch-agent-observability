@@ -191,6 +191,99 @@ def recommend_ingest_modes(detected_modules: list[dict[str, Any]], recommended_s
     return recommendations
 
 
+def compute_maturity_score(detected_modules: list[dict[str, Any]], command_handlers: list[str], recommended_signals: list[str]) -> dict[str, Any]:
+    """Compute an observability maturity score (0-100) for the workspace.
+
+    Scoring dimensions:
+    - basic_logging (0-15): runtime entrypoint + basic log output
+    - structured_telemetry (0-25): OTel SDK, trace, existing observability hooks
+    - genai_instrumentation (0-25): model adapter, tool registry, token/cost signals
+    - operational_readiness (0-20): MCP surface, command handlers, evaluation harness
+    - depth_bonus (0-15): breadth of signals, command handler diversity
+    """
+    kinds = {m.get("module_kind") for m in detected_modules}
+    signals = set(recommended_signals)
+
+    # Dimension 1: basic logging
+    basic = 0
+    if "runtime_entrypoint" in kinds:
+        basic += 8
+    if "agent_manifest" in kinds:
+        basic += 4
+    if any(s in signals for s in ("runs", "errors", "turns")):
+        basic += 3
+
+    # Dimension 2: structured telemetry
+    telemetry = 0
+    if "existing_observability" in kinds:
+        telemetry += 10
+    if "otel_sdk_surface" in kinds:
+        telemetry += 10
+    if "elastic_apm" in kinds:
+        telemetry += 5
+    if any(s in signals for s in ("otlp_ingest", "otel_semantics", "trace_bridge")):
+        telemetry += 5
+    telemetry = min(telemetry, 25)
+
+    # Dimension 3: GenAI instrumentation
+    genai = 0
+    if "model_adapter" in kinds:
+        genai += 10
+    if "tool_registry" in kinds:
+        genai += 8
+    if any(s in signals for s in ("token_usage", "cost")):
+        genai += 4
+    if any(s in signals for s in ("tool_latency", "tool_errors")):
+        genai += 3
+    genai = min(genai, 25)
+
+    # Dimension 4: operational readiness
+    ops = 0
+    if "mcp_surface" in kinds:
+        ops += 7
+    if "command_surface" in kinds or command_handlers:
+        ops += 5
+    if "evaluation_harness" in kinds:
+        ops += 4
+    if "memory_store" in kinds:
+        ops += 4
+    ops = min(ops, 20)
+
+    # Dimension 5: depth bonus
+    depth = 0
+    depth += min(len(signals), 10)
+    depth += min(len(command_handlers), 5)
+    depth = min(depth, 15)
+
+    total = basic + telemetry + genai + ops + depth
+
+    if total >= 80:
+        level = "advanced"
+        guidance = "Full trace/metric/log pipeline is ready. Focus on custom dashboards, alerting thresholds, and cost optimization."
+    elif total >= 50:
+        level = "intermediate"
+        guidance = "Core signals exist. Recommend adding spanmetrics, token budget tracking, and structured error categorization."
+    elif total >= 25:
+        level = "basic"
+        guidance = "Basic runtime detected. Recommend integrating OTel SDK, adding tool call tracing, and enabling model token tracking."
+    else:
+        level = "minimal"
+        guidance = "Very limited observability surface. Start with runtime entrypoint instrumentation and basic OTLP export."
+
+    return {
+        "score": total,
+        "level": level,
+        "guidance": guidance,
+        "dimensions": {
+            "basic_logging": basic,
+            "structured_telemetry": telemetry,
+            "genai_instrumentation": genai,
+            "operational_readiness": ops,
+            "depth_bonus": depth,
+        },
+    }
+
+
 def discover_workspace(workspace: Path, max_files: int = 400) -> dict[str, Any]:
     files = iter_text_files(workspace, max_files=max_files)
     aggregate: dict[str, dict[str, Any]] = {}
@@ -253,6 +346,7 @@ def discover_workspace(workspace: Path, max_files: int = 400) -> dict[str, Any]:
         "recommended_monitoring_plan": recommend_modules(detected_modules),
         "recommended_signals": recommended_signals,
         "recommended_ingest_modes": recommend_ingest_modes(detected_modules, recommended_signals),
+        "maturity_score": compute_maturity_score(detected_modules, sorted(set(command_handlers)), recommended_signals),
     }
     return payload
 
@@ -269,6 +363,8 @@ def main() -> int:
         print(f"✅ architecture discovery written: {output}")
         print(f"   modules: {len(payload['detected_modules'])}")
         print(f"   architecture style: {payload['architecture_style']}")
+        maturity = payload.get("maturity_score", {})
+        print(f"   maturity: {maturity.get('score', 0)}/100 ({maturity.get('level', 'unknown')})")
         return 0
     except SkillError as exc:
         print_error(str(exc))

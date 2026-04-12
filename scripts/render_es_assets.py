@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--index-prefix", default="agent-obsv")
     parser.add_argument("--retention-days", type=int, default=30)
+    parser.add_argument("--dashboard-extensions", default="", help="Optional YAML/JSON file declaring extra dashboard panels")
     return parser.parse_args()
 
 
@@ -500,7 +501,7 @@ def build_dashboard_saved_object(*, object_id: str, title: str, description: str
     }
 
 
-def build_kibana_saved_objects(index_prefix: str) -> dict[str, Any]:
+def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     ds_name = build_data_stream_name(index_prefix)
     data_view_id = f"{index_prefix}-events-view"
     saved_search_id = f"{index_prefix}-event-stream"
@@ -538,20 +539,82 @@ def build_kibana_saved_objects(index_prefix: str) -> dict[str, Any]:
         _build_lens_latency_percentiles(object_id=lens_latency_id, data_view_id=data_view_id),
         _build_lens_top_tools(object_id=lens_top_tools_id, data_view_id=data_view_id),
         _build_lens_token_usage(object_id=lens_token_usage_id, data_view_id=data_view_id),
+    ]
+
+    dashboard_panels = [
+        {"id": lens_event_rate_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_latency_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_top_tools_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_token_usage_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": saved_search_id, "type": "search", "width": "24", "height": "15"},
+        {"id": failure_search_id, "type": "search", "width": "24", "height": "15"},
+    ]
+
+    extra_lens_ids: list[str] = []
+    for ext in (extensions or []):
+        ext_id = f"{index_prefix}-lens-{ext.get('id', 'custom')}"
+        source_field = ext.get("field", "gen_ai.agent.tool_name")
+        agg_type = ext.get("aggregation", "terms")
+        viz_type = ext.get("visualization", "lnsPie")
+        title = ext.get("title", f"Custom: {source_field}")
+        size = ext.get("size", 10)
+
+        if agg_type == "terms":
+            columns = {
+                "col-slice": {"operationType": "terms", "sourceField": source_field, "params": {"size": size}},
+                "col-metric": {"operationType": "count", "label": "Count"},
+            }
+            viz_config = {"shape": "pie", "layers": [{"layerId": "layer1", "primaryGroups": ["col-slice"], "metric": "col-metric"}]}
+        elif agg_type == "sum":
+            columns = {
+                "col-x": {"operationType": "date_histogram", "sourceField": "@timestamp", "params": {"interval": "auto"}},
+                "col-y": {"operationType": "sum", "sourceField": source_field, "label": f"Sum of {source_field}"},
+            }
+            viz_type = "lnsXY"
+            viz_config = {"preferredSeriesType": "bar", "layers": [{"layerId": "layer1", "xAccessor": "col-x", "accessors": ["col-y"]}]}
+        elif agg_type == "percentile":
+            columns = {
+                "col-metric": {"operationType": "percentile", "sourceField": source_field, "params": {"percentile": ext.get("percentile", 95)}, "label": f"P{ext.get('percentile', 95)}"},
+            }
+            viz_type = "lnsMetric"
+            viz_config = {"layerId": "layer1", "accessor": "col-metric"}
+        else:
+            continue
+
+        lens_obj = {
+            "type": "lens",
+            "id": ext_id,
+            "attributes": {
+                "title": title,
+                "description": ext.get("description", f"Custom panel for {source_field}"),
+                "visualizationType": viz_type,
+                "state": {
+                    "visualization": {
+                        "title": title,
+                        "visualizationType": viz_type,
+                        "state": {
+                            "datasourceStates": {"formBased": {"layers": {"layer1": {"columns": columns, "columnOrder": list(columns.keys())}}}},
+                            "visualization": viz_config,
+                        },
+                    },
+                },
+                "kibanaSavedObjectMeta": {"searchSourceJSON": json.dumps({"query": {"language": "kuery", "query": ""}, "filter": []}, separators=(",", ":"))},
+            },
+            "references": [{"id": data_view_id, "type": "index-pattern", "name": "indexpattern-datasource-layer-layer1"}],
+        }
+        objects.append(lens_obj)
+        dashboard_panels.append({"id": ext_id, "type": "lens", "width": str(ext.get("width", 24)), "height": str(ext.get("height", 12))})
+        extra_lens_ids.append(ext_id)
+
+    objects.append(
         build_dashboard_saved_object(
             object_id=dashboard_id,
             title="Agent observability overview",
             description="Dashboard with event rate, latency, tool distribution, token usage, event stream, and failure stream.",
-            panel_refs=[
-                {"id": lens_event_rate_id, "type": "lens", "width": "24", "height": "12"},
-                {"id": lens_latency_id, "type": "lens", "width": "24", "height": "12"},
-                {"id": lens_top_tools_id, "type": "lens", "width": "24", "height": "12"},
-                {"id": lens_token_usage_id, "type": "lens", "width": "24", "height": "12"},
-                {"id": saved_search_id, "type": "search", "width": "24", "height": "15"},
-                {"id": failure_search_id, "type": "search", "width": "24", "height": "15"},
-            ],
+            panel_refs=dashboard_panels,
         ),
-    ]
+    )
+
     return {
         "space": "default",
         "objects": objects,
@@ -560,7 +623,7 @@ def build_kibana_saved_objects(index_prefix: str) -> dict[str, Any]:
             "saved_search_id": saved_search_id,
             "failure_search_id": failure_search_id,
             "dashboard_id": dashboard_id,
-            "lens_ids": [lens_event_rate_id, lens_latency_id, lens_top_tools_id, lens_token_usage_id],
+            "lens_ids": [lens_event_rate_id, lens_latency_id, lens_top_tools_id, lens_token_usage_id] + extra_lens_ids,
             "events_alias_pattern": f"{ds_name}*",
             "object_count": len(objects),
         },
@@ -571,9 +634,9 @@ def build_kibana_saved_objects(index_prefix: str) -> dict[str, Any]:
 # Report config
 # ---------------------------------------------------------------------------
 
-def build_report_config(index_prefix: str, discovery: dict[str, Any]) -> dict[str, Any]:
+def build_report_config(index_prefix: str, discovery: dict[str, Any], *, extensions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     modules = sorted({module["module_kind"] for module in discovery.get("detected_modules", []) if module.get("module_kind")})
-    kibana_bundle = build_kibana_saved_objects(index_prefix)
+    kibana_bundle = build_kibana_saved_objects(index_prefix, extensions=extensions)
     return {
         "time_range": "now-24h",
         "time_field": "@timestamp",
@@ -604,7 +667,7 @@ def build_report_config(index_prefix: str, discovery: dict[str, Any]) -> dict[st
 # Main render function
 # ---------------------------------------------------------------------------
 
-def render_assets(discovery: dict[str, Any], output_dir: Path, *, index_prefix: str, retention_days: int) -> dict[str, str]:
+def render_assets(discovery: dict[str, Any], output_dir: Path, *, index_prefix: str, retention_days: int, extensions: list[dict[str, Any]] | None = None) -> dict[str, str]:
     ensure_dir(output_dir)
     validated_prefix = validate_index_prefix(index_prefix)
     validated_retention_days = validate_positive_int(retention_days, "Retention days")
@@ -615,8 +678,8 @@ def render_assets(discovery: dict[str, Any], output_dir: Path, *, index_prefix: 
     index_template = build_index_template(validated_prefix, modules)
     ingest_pipeline = build_ingest_pipeline(modules)
     ilm_policy = build_ilm_policy(validated_retention_days)
-    kibana_saved_objects = build_kibana_saved_objects(validated_prefix)
-    report_config = build_report_config(validated_prefix, discovery)
+    kibana_saved_objects = build_kibana_saved_objects(validated_prefix, extensions=extensions)
+    report_config = build_report_config(validated_prefix, discovery, extensions=extensions)
 
     paths: dict[str, Path] = {
         "component_template_ecs_base": output_dir / "component-template-ecs-base.json",
@@ -647,7 +710,17 @@ def main() -> int:
         args = parse_args()
         discovery = read_json(Path(args.discovery).expanduser().resolve())
         output_dir = Path(args.output_dir).expanduser().resolve()
-        paths = render_assets(discovery, output_dir, index_prefix=args.index_prefix, retention_days=args.retention_days)
+        extensions = None
+        if args.dashboard_extensions:
+            ext_path = Path(args.dashboard_extensions).expanduser().resolve()
+            ext_data = read_json(ext_path)
+            if isinstance(ext_data, list):
+                extensions = ext_data
+            elif isinstance(ext_data, dict) and "panels" in ext_data:
+                extensions = ext_data["panels"]
+            else:
+                raise SkillError("Dashboard extensions file must be a JSON array or an object with a 'panels' key")
+        paths = render_assets(discovery, output_dir, index_prefix=args.index_prefix, retention_days=args.retention_days, extensions=extensions)
         print(f"✅ Elasticsearch assets written to: {output_dir}")
         for name, path in paths.items():
             print(f"   {name}: {path}")

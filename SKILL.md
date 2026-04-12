@@ -52,8 +52,12 @@ Current repo capabilities are best described as:
 - Elasticsearch storage assets (data streams, ECS mappings, component templates, tiered ILM)
 - Kibana data view, saved search, Lens visualizations, and a starter dashboard
 - standalone alert + root-cause analysis script (no Kibana Alerting license needed)
+- alert → insight-store bridge for automatic RCA conclusion archival
 - auto-instrumentation starter snippet for Python agents
 - dry-run planning before touching a live ES / Kibana target
+- configuration drift detection between local assets and live cluster
+- observability maturity scoring with upgrade guidance
+- dashboard extensions via external JSON/YAML panel declarations
 - all features target the Basic (free) Elasticsearch license
 
 Do not claim that the repo already:
@@ -102,6 +106,7 @@ Ignore generated output, docs, references, tests, and asset bundles when scannin
 - `alert_and_diagnose.py`
 - `apply_elasticsearch_assets.py`
 - `generate_report.py`
+- `validate_state.py`
 
 ## References
 

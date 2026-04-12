@@ -37,6 +37,14 @@ It inspects the workspace, generates the Elasticsearch-side assets, and gives th
 - **Archive conclusions**: write RCA results into `elasticsearch-insight-store`
 - **Support multiple ingest modes**: `collector`, `elastic-agent-fleet`, and `apm-otlp-hybrid`
 
+## Advantages
+
+- **It removes setup drag**: the agent does not need to hand-wire Collector configuration, Elasticsearch assets, and Kibana assets one by one.
+- **It fits the real debugging path**: bootstrap, diagnose, validate, and archive RCA all live in one skill instead of scattered scripts.
+- **It is built for agent systems**: it understands model calls, tool calls, MCP surfaces, token usage, and failure paths better than a generic Elasticsearch starter.
+- **It keeps the loop closed**: diagnosis output can go straight into `elasticsearch-insight-store`, so incident knowledge does not disappear after the fix.
+- **It is safe to operate**: credentials stay in environment variables by default, and the ingest pipeline redacts sensitive generative AI fields.
+
 ## Why an agent would use it
 
 An agent should not hand-build observability plumbing every time.
