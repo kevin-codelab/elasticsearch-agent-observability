@@ -9,20 +9,24 @@ This repo is designed for:
 
 ## Main outputs
 
-The bootstrap flow generates:
+The bootstrap flow now covers both generated artifacts and first-step apply outputs:
 
 - Collector config
+- Collector launcher script
+- agent OTLP env template
 - Elasticsearch index template
 - ingest pipeline
 - ILM policy
 - report config
+- apply summary
+- first report output
 
 ## Default assumptions
 
 - OTLP is the main ingestion path
 - Elasticsearch is the main storage and query backend
 - prompts and tool payloads should be redacted or summarized by default
-- generated assets should be reviewable JSON / YAML files, not hidden runtime state
+- generated assets should stay reviewable JSON / YAML / shell files, not hidden runtime state
 
 ## Minimal bootstrap
 
@@ -30,8 +34,19 @@ The bootstrap flow generates:
 python scripts/bootstrap_observability.py \
   --workspace /path/to/workspace \
   --output-dir generated/bootstrap \
-  --es-url http://localhost:9200
+  --es-url http://localhost:9200 \
+  --apply-es-assets
 ```
+
+## What this gives you
+
+At minimum, the command above should leave you with:
+
+- generated Collector config
+- generated Elasticsearch assets
+- applied template / pipeline / ILM policy
+- bootstrapped first write index alias
+- generated report output
 
 ## Rule
 

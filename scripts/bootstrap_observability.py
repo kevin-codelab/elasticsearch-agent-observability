@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Bootstrap agent observability assets."""
+"""Bootstrap agent observability assets and optional Elasticsearch setup."""
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
+from apply_elasticsearch_assets import apply_assets
 from common import (
+    ESConfig,
     SkillError,
     ensure_dir,
+    es_request,
     print_error,
     validate_credential_pair,
     validate_index_prefix,
@@ -18,8 +22,13 @@ from common import (
     write_text,
 )
 from discover_agent_architecture import discover_workspace
+from generate_report import build_report, render_markdown, search_payload
 from render_collector_config import render_config
 from render_es_assets import render_assets
+
+
+DEFAULT_OTLP_ENDPOINT = "http://127.0.0.1:4317"
+DEFAULT_COLLECTOR_BIN = "otelcol"
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,6 +44,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--service-name", default="agent-runtime")
     parser.add_argument("--retention-days", type=int, default=30)
     parser.add_argument("--max-files", type=int, default=400)
+    parser.add_argument("--apply-es-assets", action="store_true", help="Apply generated Elasticsearch assets to the target cluster")
+    parser.add_argument("--skip-bootstrap-index", action="store_true", help="Do not create the first rollover write index")
+    parser.add_argument("--report-output", help="Optional path for a generated markdown/json report")
+    parser.add_argument("--report-format", choices=["markdown", "json"], help="Optional report output format override")
+    parser.add_argument("--time-range", default="now-24h")
+    parser.add_argument("--otlp-endpoint", default=DEFAULT_OTLP_ENDPOINT)
+    parser.add_argument("--collector-bin", default=DEFAULT_COLLECTOR_BIN)
     return parser.parse_args()
 
 
@@ -56,21 +72,83 @@ def collect_summary_notes(discovery: dict, *, max_files: int, auth_mode: str, in
     return notes
 
 
-def build_summary(discovery_path: Path, collector_path: Path, assets_paths: dict[str, str], notes: list[str]) -> str:
+def build_runtime_env(*, service_name: str, environment: str, otlp_endpoint: str) -> str:
+    return "\n".join(
+        [
+            "# Agent OTLP runtime defaults",
+            f"OTEL_EXPORTER_OTLP_ENDPOINT={otlp_endpoint}",
+            "OTEL_EXPORTER_OTLP_PROTOCOL=grpc",
+            f"OTEL_SERVICE_NAME={service_name}",
+            f"OTEL_RESOURCE_ATTRIBUTES=deployment.environment={environment},observer.product=elasticsearch-agent-observability",
+            "# Fill these only if your Collector exporter uses env placeholders.",
+            "ELASTICSEARCH_USERNAME=",
+            "ELASTICSEARCH_PASSWORD=",
+            "",
+        ]
+    )
+
+
+def build_collector_run_script(*, collector_bin: str, collector_path: Path, env_path: Path) -> str:
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            'set -a',
+            f'source "{env_path}"',
+            'set +a',
+            f': "${{OTELCOL_BIN:={collector_bin}}}"',
+            f'exec "${{OTELCOL_BIN}}" --config "{collector_path}"',
+            "",
+        ]
+    )
+
+
+def build_summary(
+    *,
+    discovery_path: Path,
+    collector_path: Path,
+    assets_paths: dict[str, str],
+    env_path: Path,
+    collector_run_path: Path,
+    notes: list[str],
+    apply_summary_path: Path | None,
+    report_output: Path | None,
+) -> str:
     lines = [
         "# Agent Observability Bootstrap Summary",
         "",
         f"- discovery: `{discovery_path}`",
         f"- collector config: `{collector_path}`",
+        f"- collector launcher: `{collector_run_path}`",
+        f"- agent OTLP env: `{env_path}`",
         f"- index template: `{assets_paths['index_template']}`",
         f"- ingest pipeline: `{assets_paths['ingest_pipeline']}`",
         f"- ilm policy: `{assets_paths['ilm_policy']}`",
         f"- report config: `{assets_paths['report_config']}`",
     ]
+    if apply_summary_path:
+        lines.append(f"- apply summary: `{apply_summary_path}`")
+    if report_output:
+        lines.append(f"- report: `{report_output}`")
     if notes:
         lines.extend(["", "## Notes", ""])
         lines.extend(f"- {note}" for note in notes)
     return "\n".join(lines) + "\n"
+
+
+def write_report(*, es_config: ESConfig, report_config_path: Path, output: Path, time_range: str, output_format: str | None) -> Path:
+    report_config = __import__("json").loads(Path(report_config_path).read_text(encoding="utf-8"))
+    events_alias = str(report_config.get("events_alias", "")).strip()
+    result = es_request(es_config, "POST", f"/{events_alias}/_search", search_payload(time_range))
+    report = build_report(result)
+    resolved_output = output.expanduser().resolve()
+    format_name = output_format or ("json" if resolved_output.suffix.lower() == ".json" else "markdown")
+    if format_name == "json":
+        write_json(resolved_output, report)
+    else:
+        write_text(resolved_output, render_markdown(report, {**report_config, "time_range": time_range, "events_alias": events_alias}))
+    return resolved_output
 
 
 def main() -> int:
@@ -103,6 +181,16 @@ def main() -> int:
         )
         write_text(collector_path, collector_text)
 
+        env_path = output_dir / "agent-otel.env"
+        write_text(env_path, build_runtime_env(service_name=args.service_name, environment=args.environment, otlp_endpoint=args.otlp_endpoint))
+
+        collector_run_path = output_dir / "run-collector.sh"
+        write_text(
+            collector_run_path,
+            build_collector_run_script(collector_bin=args.collector_bin, collector_path=collector_path, env_path=env_path),
+        )
+        collector_run_path.chmod(0o755)
+
         assets_dir = output_dir / "elasticsearch"
         assets_paths = render_assets(
             discovery,
@@ -110,13 +198,66 @@ def main() -> int:
             index_prefix=index_prefix,
             retention_days=retention_days,
         )
+
+        apply_summary_path = None
+        es_config = ESConfig(
+            es_url=args.es_url,
+            es_user=credentials[0] if credentials else None,
+            es_password=credentials[1] if credentials else None,
+        )
+        if args.apply_es_assets:
+            apply_summary = apply_assets(
+                es_config,
+                assets_dir=assets_dir,
+                index_prefix=index_prefix,
+                bootstrap_index=not args.skip_bootstrap_index,
+            )
+            apply_summary_path = assets_dir / "apply-summary.json"
+            write_json(apply_summary_path, apply_summary)
+
+        report_output_arg = args.report_output
+        if not report_output_arg and args.apply_es_assets:
+            report_output_arg = str(output_dir / "report.md")
+        report_output_path = None
+        if report_output_arg:
+            report_output_path = write_report(
+                es_config=es_config,
+                report_config_path=Path(assets_paths["report_config"]),
+                output=Path(report_output_arg),
+                time_range=args.time_range,
+                output_format=args.report_format,
+            )
+
         notes = collect_summary_notes(discovery, max_files=max_files, auth_mode=auth_mode, index_prefix=index_prefix)
+        if apply_summary_path:
+            notes.append("Elasticsearch assets were applied to the target cluster, including template, pipeline, ILM policy, and optional write-index bootstrap.")
+        if report_output_path:
+            notes.append("A runtime report was generated as part of bootstrap so you can immediately validate the query path.")
+        notes.append("Use `run-collector.sh` to start the Collector and `agent-otel.env` as the runtime env template for the agent process.")
+
         summary_path = output_dir / "bootstrap-summary.md"
-        write_text(summary_path, build_summary(discovery_path, collector_path, assets_paths, notes))
+        write_text(
+            summary_path,
+            build_summary(
+                discovery_path=discovery_path,
+                collector_path=collector_path,
+                assets_paths=assets_paths,
+                env_path=env_path,
+                collector_run_path=collector_run_path,
+                notes=notes,
+                apply_summary_path=apply_summary_path,
+                report_output=report_output_path,
+            ),
+        )
 
         print(f"✅ bootstrap complete: {output_dir}")
         print(f"   discovery: {discovery_path}")
         print(f"   collector: {collector_path}")
+        print(f"   launcher: {collector_run_path}")
+        if apply_summary_path:
+            print(f"   apply summary: {apply_summary_path}")
+        if report_output_path:
+            print(f"   report: {report_output_path}")
         print(f"   summary: {summary_path}")
         return 0
     except SkillError as exc:

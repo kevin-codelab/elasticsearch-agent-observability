@@ -25,7 +25,8 @@ The skill should:
 1. inspect the target workspace or agent layout
 2. auto-discover monitorable modules
 3. render Collector config and Elasticsearch assets
-4. generate a report definition and runtime outputs
+4. apply Elasticsearch assets when the user wants a real bootstrap, including the first write index
+5. generate report outputs plus runtime launcher/env artifacts
 
 ## Resolve the Script Path
 
@@ -37,12 +38,23 @@ Resolve absolute paths from the directory that contains this file.
 The main outputs are:
 - architecture discovery result
 - rendered OTel Collector config
-- Elasticsearch assets
+- Collector launcher and agent env template
+- Elasticsearch assets and apply summary
 - Markdown / JSON report
+
+## Commands
+
+- `bootstrap_observability.py`
+- `apply_elasticsearch_assets.py`
+- `discover_agent_architecture.py`
+- `render_collector_config.py`
+- `render_es_assets.py`
+- `generate_report.py`
 
 ## Important Notes
 
 - Use Elasticsearch 9.x compatible assets
 - Prefer direct, practical outputs over abstract observability theory
 - Keep sensitive prompts, args, and results in redacted or summarized form by default
+- Do not pretend the repo installed the Collector binary or rewired the agent SDK if it only generated launcher/env files
 - For deeper rules, read `references/architecture.md`, `references/config_guide.md`, `references/telemetry_schema.md`, and `references/reporting.md`
