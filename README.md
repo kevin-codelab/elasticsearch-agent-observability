@@ -3,28 +3,13 @@
 A skill that gives an AI agent a black box in Elasticsearch and Kibana.
 It turns traces, tool calls, token usage, failures, and latency into a working observability surface instead of a pile of ad hoc scripts.
 
-## A story
+## Overview
 
-You already have an agent in production.
-It calls models, tools, and maybe MCP endpoints.
-At first it looks fine. A few days later, the same pattern shows up every time:
+This skill bootstraps observability for AI agents on Elasticsearch, OpenTelemetry, and Kibana.
 
-- users say the agent is sometimes slow
-- token cost keeps going up
-- some runs fail at random
-- nobody can tell whether the problem is in the model call, the tool call, the MCP layer, or the telemetry pipeline
+It is designed for agents that already run model calls, tool calls, and MCP flows but still lack a usable observability baseline. Instead of hand-building OpenTelemetry Collector configuration, Elasticsearch data streams, ingest pipelines, lifecycle policies, Kibana dashboards, and drift checks, the skill generates the base layer as a working starter.
 
-The hard part is not opening Kibana.
-The hard part is building everything that Kibana needs before it becomes useful:
-
-- OpenTelemetry Collector configuration
-- Elasticsearch data streams and mappings
-- ingest pipelines and lifecycle policies
-- Kibana data views, searches, and dashboards
-- alert diagnosis and drift checks
-
-This skill does that setup work.
-It inspects the workspace, generates the Elasticsearch-side assets, and gives the agent a ready-to-use observability starter on top of Elasticsearch and Kibana.
+After bootstrap, the workspace has a ready set of assets for collection, storage, visualization, diagnosis, and validation.
 
 ## What the skill does
 
