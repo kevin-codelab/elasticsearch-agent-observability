@@ -20,7 +20,9 @@ The normal bootstrap path should leave:
 - ILM policy
 - report config
 - Kibana saved objects bundle
+- optional Python instrumentation starter file
 - optional apply summary
+- optional sanity-check result
 - optional smoke report
 
 ## Workspace Rule
@@ -45,10 +47,35 @@ Default path:
 
 Only use `--embed-es-credentials` when the file can be treated as secret material.
 
+## Collector Distribution Rule
+
+The generated Collector config depends on components such as:
+
+- `spanmetrics`
+- Elasticsearch exporter
+- optional `filelog`
+
+Assume **`otelcol-contrib`** by default, or a custom Collector build with equivalent components.
+Do not assume a minimal core `otelcol` binary will run the generated config.
+
 ## Launcher Rule
 
-`run-collector.sh` now uses sibling-relative paths.
+`run-collector.sh` uses sibling-relative paths.
 That means the launcher, env file, and Collector YAML can move together as one bundle without rewriting absolute paths.
+
+The launcher also respects `OTELCOL_BIN`, so operators can override the binary path without editing the script.
+
+## Dry-Run Rule
+
+`bootstrap_observability.py --dry-run` should be treated as a planning pass:
+
+- assets are rendered
+- apply plan is written
+- no ES / Kibana requests are sent
+- no sanity check runs
+- no smoke report query runs
+
+Use it before touching a real cluster, especially when reviewing generated Kibana objects or rollout impact.
 
 ## Time Field Contract
 
@@ -60,6 +87,16 @@ Current default is:
 The ingest pipeline stamps `@timestamp` from ingest time when upstream telemetry does not provide it.
 `captured_at` is kept as an alias to `@timestamp` for backward compatibility.
 That keeps Kibana and the smoke report on the same time-field contract.
+
+## Report Contract Rule
+
+`report-config.json` should only list metrics that the current implementation really emits.
+Current latency keys are:
+
+- `p50_latency_ms`
+- `p95_latency_ms`
+
+If the report payload changes, refresh the contract and example generated assets together.
 
 ## Minimal Bootstrap
 
@@ -80,5 +117,6 @@ This repo does not guarantee:
 - auto-instrumentation of arbitrary agent code
 - perfect schema extraction from every telemetry source
 - a full dashboard pack in Kibana
+- end-to-end runtime → Collector → ES → Kibana validation for every target app
 
 Treat it as a strong Elastic-side starter, not as the whole runtime plane.

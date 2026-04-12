@@ -131,6 +131,27 @@ class ApplyAndBootstrapTests(unittest.TestCase):
         self.assertTrue(any("_data_stream" in p for p in paths))
         self.assertTrue(any("saved_objects" in p for p in paths))
 
+    def test_apply_assets_dry_run_can_preview_kibana_without_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            assets_dir = Path(tmp_dir)
+            (assets_dir / "component-template-ecs-base.json").write_text('{"template": {"mappings": {}}}', encoding="utf-8")
+            (assets_dir / "component-template-settings.json").write_text('{"template": {"settings": {}}}', encoding="utf-8")
+            (assets_dir / "index-template.json").write_text('{"index_patterns": ["agent-obsv-events*"], "data_stream": {}}', encoding="utf-8")
+            (assets_dir / "ingest-pipeline.json").write_text('{"processors": []}', encoding="utf-8")
+            (assets_dir / "ilm-policy.json").write_text('{"policy": {"phases": {}}}', encoding="utf-8")
+            (assets_dir / "report-config.json").write_text('{"events_alias": "agent-obsv-events"}', encoding="utf-8")
+            (assets_dir / "kibana-saved-objects.json").write_text('{"objects": [{"type": "search", "id": "test-search"}]}', encoding="utf-8")
+            summary = apply_elasticsearch_assets.apply_assets(
+                ESConfig(es_url="http://localhost:9200"),
+                assets_dir=assets_dir,
+                index_prefix="agent-obsv",
+                bootstrap_index=False,
+                apply_kibana=True,
+                dry_run=True,
+            )
+        paths = [step["path"] for step in summary["plan"]]
+        self.assertTrue(any(path.endswith("/api/saved_objects/search/test-search") for path in paths))
+
 
 if __name__ == "__main__":
     unittest.main()

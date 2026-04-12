@@ -585,8 +585,8 @@ def build_report_config(index_prefix: str, discovery: dict[str, Any]) -> dict[st
         "kibana": kibana_bundle["summary"],
         "metrics": [
             "success_rate",
-            "p50_latency_ns",
-            "p95_latency_ns",
+            "p50_latency_ms",
+            "p95_latency_ms",
             "tool_error_rate",
             "retry_total",
             "token_input_total",

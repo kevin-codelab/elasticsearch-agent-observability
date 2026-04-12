@@ -1,22 +1,23 @@
 ---
 name: elasticsearch-agent-observability
-description: "Use this skill when a user wants to bootstrap agent observability on Elasticsearch, OpenTelemetry, and Kibana. Inspect the workspace, render Collector and Elasticsearch assets, prepare a Kibana entry surface, and apply those assets when the user wants a working starter setup."
+description: "Use this skill when a user wants to bootstrap agent observability on Elasticsearch, OpenTelemetry, and Kibana. Inspect the workspace, render Collector and Elasticsearch assets, prepare a Kibana entry surface, and optionally dry-run or apply those assets as a working starter setup."
 ---
 
 # Elasticsearch Agent Observability
 
 ## Purpose
 
-Bootstrap a practical Elastic-side observability surface for an agent.
+Bootstrap a practical **Elastic-side starter surface** for an agent.
 
-Treat this skill as a **starter builder**:
+Treat this skill as a builder for the base layer:
 
 - inspect the workspace
 - render artifacts
+- preview the apply plan
 - apply assets
 - smoke-check the query path
 
-Do not present it as a full observability platform if the underlying repo only prepares the base layer.
+Do not present it as a full observability platform if the repo only prepares the base layer.
 
 ## Trigger Conditions
 
@@ -37,8 +38,9 @@ That path should:
 2. discover likely monitorable modules
 3. render Collector config, env file, and launcher
 4. render Elasticsearch assets
-5. optionally apply Elasticsearch and Kibana assets
-6. optionally generate a smoke report
+5. optionally generate a Python instrumentation starter file
+6. optionally dry-run or apply Elasticsearch and Kibana assets
+7. optionally generate a smoke report after a real apply
 
 ## Product Boundary
 
@@ -48,22 +50,30 @@ Current repo capabilities are best described as:
 
 - Collector-side integration artifacts (traces + logs + metrics pipelines)
 - Elasticsearch storage assets (data streams, ECS mappings, component templates, tiered ILM)
-- Kibana data view, saved search, Lens visualizations, and starter dashboard
-- Standalone alert + root-cause analysis script (no Kibana Alerting license needed)
-- Auto-instrumentation snippet for Python agents
-- All features work on the Basic (free) Elasticsearch license
+- Kibana data view, saved search, Lens visualizations, and a starter dashboard
+- standalone alert + root-cause analysis script (no Kibana Alerting license needed)
+- auto-instrumentation starter snippet for Python agents
+- dry-run planning before touching a live ES / Kibana target
+- all features target the Basic (free) Elasticsearch license
 
 Do not claim that the repo already:
 
 - rewires the agent SDK automatically
+- makes arbitrary runtime instrumentation disappear
 - ships a complete Kibana observability suite
 - performs deep semantic parsing of arbitrary telemetry
+
+## Collector Rule
+
+The generated Collector config uses contrib-only components such as `spanmetrics` and the Elasticsearch exporter.
+Default the launcher to `otelcol-contrib`, or document the need for an equivalent custom Collector distribution.
+Do not imply that a minimal core `otelcol` binary is enough.
 
 ## Security Rule
 
 Prefer env-placeholder credentials by default.
 Only embed Elasticsearch credentials into YAML when the operator explicitly asks for it.
-Treat that embedded YAML as secret material.
+Treat embedded YAML as secret material.
 
 ## Reporting Rule
 

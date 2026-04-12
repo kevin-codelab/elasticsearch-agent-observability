@@ -243,7 +243,7 @@ def apply_assets(
         plan.append({"action": "PUT", "path": f"/_index_template/{template_name}", "asset": "index_template"})
         if bootstrap_index:
             plan.append({"action": "PUT", "path": f"/_data_stream/{build_data_stream_name(validated_prefix)}", "asset": "data_stream"})
-        if apply_kibana and kibana_url and assets.get("kibana_saved_objects"):
+        if apply_kibana and assets.get("kibana_saved_objects"):
             objects = assets["kibana_saved_objects"].get("objects", [])
             for obj in objects:
                 plan.append({"action": "POST", "path": f"/api/saved_objects/{obj.get('type')}/{obj.get('id')}", "asset": f"kibana:{obj.get('type')}"})

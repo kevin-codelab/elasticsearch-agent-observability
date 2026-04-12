@@ -150,6 +150,9 @@ class ContractsAndSecurityTests(unittest.TestCase):
         self.assertIn("data_stream", report_config)
         self.assertEqual(report_config["data_stream"], "agent-obsv-events")
         self.assertIn("dashboard_id", report_config["kibana"])
+        self.assertIn("p50_latency_ms", report_config["metrics"])
+        self.assertIn("p95_latency_ms", report_config["metrics"])
+        self.assertNotIn("p50_latency_ns", report_config["metrics"])
 
     def test_collect_summary_notes_reports_truncation_and_auth_mode(self) -> None:
         notes = bootstrap_observability.collect_summary_notes(
@@ -158,11 +161,14 @@ class ContractsAndSecurityTests(unittest.TestCase):
             auth_mode="env",
             index_prefix="agent-obsv",
             ingest_mode="collector",
+            dry_run=True,
         )
         self.assertTrue(any("--max-files" in note for note in notes))
         self.assertTrue(any("credentials were not written to disk" in note for note in notes))
         self.assertTrue(any("agent-obsv-events" in note for note in notes))
         self.assertTrue(any("Selected ingest mode" in note for note in notes))
+        self.assertTrue(any("otelcol-contrib" in note for note in notes))
+        self.assertTrue(any("Dry-run mode" in note for note in notes))
 
     def test_search_payload_uses_ecs_fields_by_default(self) -> None:
         payload = generate_report.search_payload("now-24h")

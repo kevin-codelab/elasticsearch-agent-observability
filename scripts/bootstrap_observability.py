@@ -30,7 +30,7 @@ from render_es_assets import render_assets
 from render_instrument_snippet import render_snippet_to_file
 
 DEFAULT_OTLP_ENDPOINT = "http://127.0.0.1:4317"
-DEFAULT_COLLECTOR_BIN = "otelcol"
+DEFAULT_COLLECTOR_BIN = "otelcol-contrib"
 DEFAULT_INGEST_MODE = "collector"
 
 
@@ -65,6 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--generate-instrument-snippet", action="store_true", help="Generate a Python auto-instrumentation starter file")
     parser.add_argument("--no-verify-tls", action="store_true", help="Disable TLS certificate verification for ES and Kibana requests")
     parser.add_argument("--kibana-api-key", default="", help="Optional Kibana API key (instead of reusing ES Basic Auth)")
+    parser.add_argument("--dry-run", action="store_true", help="Render assets and output the ES/Kibana apply plan without sending requests")
     return parser.parse_args()
 
 
@@ -77,6 +78,7 @@ def collect_summary_notes(
     ingest_mode: str,
     apply_kibana_assets: bool = False,
     has_elastic_native_bundle: bool = False,
+    dry_run: bool = False,
 ) -> list[str]:
     notes: list[str] = []
     if discovery.get("files_scanned", 0) >= max_files:
@@ -97,10 +99,16 @@ def collect_summary_notes(
         preview = ", ".join(f"{item['mode']}({item['score']})" for item in recommendations[:3] if item.get("mode"))
         notes.append(f"Discovery recommended ingest modes: {preview}.")
     notes.append(f"Selected ingest mode: `{ingest_mode}`.")
+    if ingest_mode in {"collector", "apm-otlp-hybrid"}:
+        notes.append(
+            "The generated Collector config uses contrib-only components such as `spanmetrics` and the Elasticsearch exporter; the launcher defaults to `otelcol-contrib`, or another compatible custom distribution."
+        )
     if has_elastic_native_bundle:
         notes.append("Elastic-native starter assets were rendered, including Elastic Agent / Fleet / APM bootstrap files for operator review.")
     if apply_kibana_assets:
         notes.append("Kibana saved objects are part of the generated asset surface, so the human-facing report path can land in Kibana instead of living only in Markdown.")
+    if dry_run:
+        notes.append("Dry-run mode rendered artifacts and the apply plan only; no Elasticsearch/Kibana requests, sanity check, or smoke report query were executed.")
     return notes
 
 
@@ -148,8 +156,10 @@ def build_summary(
     collector_path: Path | None,
     env_path: Path | None,
     collector_run_path: Path | None,
+    instrument_snippet_path: Path | None,
     native_assets_paths: dict[str, str] | None,
     apply_summary_path: Path | None,
+    sanity_check_path: Path | None,
     report_output: Path | None,
 ) -> str:
     lines = [
@@ -172,6 +182,8 @@ def build_summary(
                 f"- agent OTLP env: `{env_path}`",
             ]
         )
+    if instrument_snippet_path:
+        lines.append(f"- instrument snippet: `{instrument_snippet_path}`")
     if native_assets_paths:
         lines.extend(
             [
@@ -183,6 +195,8 @@ def build_summary(
         )
     if apply_summary_path:
         lines.append(f"- apply summary: `{apply_summary_path}`")
+    if sanity_check_path:
+        lines.append(f"- sanity check: `{sanity_check_path}`")
     if report_output:
         lines.append(f"- smoke report: `{report_output}`")
     if notes:
@@ -209,8 +223,8 @@ def write_report(*, es_config: ESConfig, report_config_path: Path, output: Path,
 def main() -> int:
     try:
         args = parse_args()
-        if args.apply_kibana_assets and not args.kibana_url.strip():
-            raise SkillError("--kibana-url is required when --apply-kibana-assets is enabled")
+        if args.apply_kibana_assets and not args.kibana_url.strip() and not args.dry_run:
+            raise SkillError("--kibana-url is required when --apply-kibana-assets is enabled unless --dry-run is used")
         workspace = validate_workspace_dir(Path(args.workspace), "Workspace")
         output_dir = ensure_dir(Path(args.output_dir).expanduser().resolve())
         index_prefix = validate_index_prefix(args.index_prefix)
@@ -295,6 +309,8 @@ def main() -> int:
             )
 
         apply_summary_path = None
+        sanity_check_path = None
+        apply_summary: dict[str, Any] | None = None
         es_config = ESConfig(
             es_url=args.es_url,
             es_user=credentials[0] if credentials else None,
@@ -311,21 +327,24 @@ def main() -> int:
                 kibana_url=args.kibana_url.strip() or None,
                 kibana_space=args.kibana_space,
                 apply_kibana=args.apply_kibana_assets,
+                dry_run=args.dry_run,
             )
             apply_summary_path = assets_dir / "apply-summary.json"
             write_json(apply_summary_path, apply_summary)
-            sanity_result = sanity_check(es_config, index_prefix=index_prefix)
-            write_json(assets_dir / "sanity-check.json", sanity_result)
-            if sanity_result.get("status") == "passed":
-                print(f"   ✅ sanity check passed (pipeline_applied={sanity_result.get('pipeline_applied')})")
-            else:
-                print(f"   ⚠️  sanity check failed: {sanity_result.get('reason', 'unknown')}")
+            if not args.dry_run:
+                sanity_result = sanity_check(es_config, index_prefix=index_prefix)
+                sanity_check_path = assets_dir / "sanity-check.json"
+                write_json(sanity_check_path, sanity_result)
+                if sanity_result.get("status") == "passed":
+                    print(f"   ✅ sanity check passed (pipeline_applied={sanity_result.get('pipeline_applied')})")
+                else:
+                    print(f"   ⚠️  sanity check failed: {sanity_result.get('reason', 'unknown')}")
 
         report_output_arg = args.report_output
-        if not report_output_arg and args.apply_es_assets:
+        if not report_output_arg and args.apply_es_assets and not args.dry_run:
             report_output_arg = str(output_dir / "report.md")
         report_output_path = None
-        if report_output_arg:
+        if report_output_arg and not args.dry_run:
             report_output_path = write_report(
                 es_config=es_config,
                 report_config_path=Path(assets_paths["report_config"]),
@@ -342,15 +361,24 @@ def main() -> int:
             ingest_mode=args.ingest_mode,
             apply_kibana_assets=args.apply_kibana_assets,
             has_elastic_native_bundle=bool(native_assets_paths),
+            dry_run=args.dry_run,
         )
         if apply_summary_path:
-            notes.append("Elasticsearch assets were applied to the target cluster, including template, pipeline, ILM policy, and optional write-index bootstrap.")
-        if args.apply_kibana_assets:
+            if args.dry_run:
+                plan_count = apply_summary.get("plan_count", 0) if isinstance(apply_summary, dict) else 0
+                notes.append(f"The apply summary contains a dry-run plan with {plan_count} operation(s); nothing was sent to Elasticsearch or Kibana.")
+            else:
+                notes.append("Elasticsearch assets were applied to the target cluster, including template, pipeline, ILM policy, and optional write-index bootstrap.")
+        if args.apply_kibana_assets and not args.dry_run:
             notes.append("Kibana saved objects were applied, so the default human-facing observability surface now lives in Kibana dashboards / Discover entrypoints.")
+        if report_output_arg and args.dry_run:
+            notes.append("A smoke report was requested but skipped because dry-run mode does not query Elasticsearch.")
         if report_output_path:
             notes.append("A markdown/json smoke report was also generated so you can validate the query path before opening Kibana.")
         if collector_run_path and env_path:
             notes.append("Use `run-collector.sh` to start the Collector and `agent-otel.env` as the runtime env template for the agent process.")
+        if instrument_snippet_path:
+            notes.append("`agent_otel_bootstrap.py` is a starter snippet for Python runtimes; you still need to import or wire it into the actual agent entrypoint.")
         if native_assets_paths:
             notes.append("Use the `elastic-native` bundle when the operator prefers Fleet enrollment or APM/OTLP hybrid wiring instead of Collector-only mode.")
         notes.append(
@@ -369,8 +397,10 @@ def main() -> int:
                 collector_path=collector_path,
                 env_path=env_path,
                 collector_run_path=collector_run_path,
+                instrument_snippet_path=instrument_snippet_path,
                 native_assets_paths=native_assets_paths,
                 apply_summary_path=apply_summary_path,
+                sanity_check_path=sanity_check_path,
                 report_output=report_output_path,
             ),
         )
@@ -381,11 +411,15 @@ def main() -> int:
             print(f"   collector: {collector_path}")
         if collector_run_path:
             print(f"   launcher: {collector_run_path}")
+        if instrument_snippet_path:
+            print(f"   instrument snippet: {instrument_snippet_path}")
         if native_assets_paths:
             print(f"   elastic-native policy: {native_assets_paths['policy']}")
         print(f"   kibana bundle: {assets_paths['kibana_saved_objects_ndjson']}")
         if apply_summary_path:
             print(f"   apply summary: {apply_summary_path}")
+        if sanity_check_path:
+            print(f"   sanity check: {sanity_check_path}")
         if report_output_path:
             print(f"   smoke report: {report_output_path}")
         print(f"   summary: {summary_path}")
