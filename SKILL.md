@@ -46,15 +46,17 @@ Keep the boundary honest.
 
 Current repo capabilities are best described as:
 
-- Collector-side integration artifacts
-- Elasticsearch storage assets
-- ILM and write-index bootstrap
-- Kibana data view and saved-search entry surface
+- Collector-side integration artifacts (traces + logs + metrics pipelines)
+- Elasticsearch storage assets (data streams, ECS mappings, component templates, tiered ILM)
+- Kibana data view, saved search, Lens visualizations, and starter dashboard
+- Standalone alert + root-cause analysis script (no Kibana Alerting license needed)
+- Auto-instrumentation snippet for Python agents
+- All features work on the Basic (free) Elasticsearch license
 
 Do not claim that the repo already:
 
 - rewires the agent SDK automatically
-- ships a full Kibana dashboard suite
+- ships a complete Kibana observability suite
 - performs deep semantic parsing of arbitrary telemetry
 
 ## Security Rule
@@ -85,6 +87,9 @@ Ignore generated output, docs, references, tests, and asset bundles when scannin
 - `discover_agent_architecture.py`
 - `render_collector_config.py`
 - `render_es_assets.py`
+- `render_elastic_agent_assets.py`
+- `render_instrument_snippet.py`
+- `alert_and_diagnose.py`
 - `apply_elasticsearch_assets.py`
 - `generate_report.py`
 

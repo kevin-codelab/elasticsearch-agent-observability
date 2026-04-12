@@ -55,9 +55,10 @@ That means the launcher, env file, and Collector YAML can move together as one b
 `report-config.json` declares the reporting time field.
 Current default is:
 
-- `time_field = captured_at`
+- `time_field = @timestamp`
 
-The ingest pipeline now stamps `captured_at` from ingest time when upstream telemetry does not provide it.
+The ingest pipeline stamps `@timestamp` from ingest time when upstream telemetry does not provide it.
+`captured_at` is kept as an alias to `@timestamp` for backward compatibility.
 That keeps Kibana and the smoke report on the same time-field contract.
 
 ## Minimal Bootstrap

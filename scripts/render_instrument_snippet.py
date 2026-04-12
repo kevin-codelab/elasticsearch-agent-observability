@@ -154,10 +154,14 @@ def traced_model_call(model_name: str):
                     result = func(*args, **kwargs)
                     span.set_attribute("event.outcome", "success")
                     if isinstance(result, dict):
-                        if "usage" in result:
-                            usage = result["usage"]
-                            span.set_attribute("gen_ai.usage.input_tokens", usage.get("prompt_tokens", 0))
-                            span.set_attribute("gen_ai.usage.output_tokens", usage.get("completion_tokens", 0))
+                        usage = result.get("usage", {})
+                        if isinstance(usage, dict):
+                            span.set_attribute("gen_ai.usage.input_tokens", usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+                            span.set_attribute("gen_ai.usage.output_tokens", usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+                    elif hasattr(result, "usage") and result.usage is not None:
+                        usage = result.usage
+                        span.set_attribute("gen_ai.usage.input_tokens", getattr(usage, "prompt_tokens", 0) or getattr(usage, "input_tokens", 0) or 0)
+                        span.set_attribute("gen_ai.usage.output_tokens", getattr(usage, "completion_tokens", 0) or getattr(usage, "output_tokens", 0) or 0)
                     return result
                 except Exception as exc:
                     span.set_attribute("event.outcome", "failure")
@@ -168,6 +172,105 @@ def traced_model_call(model_name: str):
         wrapper.__doc__ = func.__doc__
         return wrapper
     return decorator
+'''
+
+_AUTO_PATCH = '''
+
+# --- Zero-code auto-patching for popular LLM SDKs ---
+
+def _auto_patch():
+    """Monkey-patch OpenAI and Anthropic SDK entry points to emit OTel spans automatically.
+
+    Call this after setup() to get zero-code observability: just import this module and
+    every ChatCompletion / Messages call will be traced with token usage, latency, and errors.
+    """
+    try:
+        from opentelemetry import trace
+        _tracer = trace.get_tracer("agent-observability.auto-patch")
+    except ImportError:
+        return
+
+    import importlib
+    import time as _time
+
+    # --- Patch OpenAI ---
+    try:
+        openai = importlib.import_module("openai")
+        _OrigChatCompletions = getattr(openai.resources.chat.completions, "Completions", None)
+        if _OrigChatCompletions is not None:
+            _orig_create = _OrigChatCompletions.create
+            def _patched_openai_create(self, *args, **kwargs):
+                model = kwargs.get("model", "unknown")
+                with _tracer.start_as_current_span(
+                    f"openai.chat.{model}",
+                    attributes={
+                        "gen_ai.system": "openai",
+                        "gen_ai.request.model": model,
+                        "gen_ai.agent.model_name": model,
+                        "gen_ai.agent.signal_type": "model_call",
+                    },
+                ) as span:
+                    _t0 = _time.monotonic()
+                    try:
+                        result = _orig_create(self, *args, **kwargs)
+                        span.set_attribute("event.outcome", "success")
+                        if hasattr(result, "usage") and result.usage is not None:
+                            span.set_attribute("gen_ai.usage.input_tokens", getattr(result.usage, "prompt_tokens", 0) or 0)
+                            span.set_attribute("gen_ai.usage.output_tokens", getattr(result.usage, "completion_tokens", 0) or 0)
+                        if hasattr(result, "model"):
+                            span.set_attribute("gen_ai.response.model", result.model)
+                        return result
+                    except Exception as exc:
+                        span.set_attribute("event.outcome", "failure")
+                        span.set_attribute("gen_ai.agent.error_type", type(exc).__name__)
+                        span.record_exception(exc)
+                        raise
+                    finally:
+                        span.set_attribute("gen_ai.agent.latency_ms", (_time.monotonic() - _t0) * 1000)
+            _OrigChatCompletions.create = _patched_openai_create
+    except (ImportError, AttributeError):
+        pass
+
+    # --- Patch Anthropic ---
+    try:
+        anthropic = importlib.import_module("anthropic")
+        _OrigMessages = getattr(anthropic.resources, "Messages", None) or getattr(anthropic.resources.messages, "Messages", None)
+        if _OrigMessages is not None:
+            _orig_msg_create = _OrigMessages.create
+            def _patched_anthropic_create(self, *args, **kwargs):
+                model = kwargs.get("model", "unknown")
+                with _tracer.start_as_current_span(
+                    f"anthropic.messages.{model}",
+                    attributes={
+                        "gen_ai.system": "anthropic",
+                        "gen_ai.request.model": model,
+                        "gen_ai.agent.model_name": model,
+                        "gen_ai.agent.signal_type": "model_call",
+                    },
+                ) as span:
+                    _t0 = _time.monotonic()
+                    try:
+                        result = _orig_msg_create(self, *args, **kwargs)
+                        span.set_attribute("event.outcome", "success")
+                        if hasattr(result, "usage") and result.usage is not None:
+                            span.set_attribute("gen_ai.usage.input_tokens", getattr(result.usage, "input_tokens", 0) or 0)
+                            span.set_attribute("gen_ai.usage.output_tokens", getattr(result.usage, "output_tokens", 0) or 0)
+                        if hasattr(result, "model"):
+                            span.set_attribute("gen_ai.response.model", result.model)
+                        return result
+                    except Exception as exc:
+                        span.set_attribute("event.outcome", "failure")
+                        span.set_attribute("gen_ai.agent.error_type", type(exc).__name__)
+                        span.record_exception(exc)
+                        raise
+                    finally:
+                        span.set_attribute("gen_ai.agent.latency_ms", (_time.monotonic() - _t0) * 1000)
+            _OrigMessages.create = _patched_anthropic_create
+    except (ImportError, AttributeError):
+        pass
+
+
+_auto_patch()
 '''
 
 
@@ -190,6 +293,8 @@ def render_instrument_snippet(
     )
     if {"tool_registry", "model_adapter", "mcp_surface", "runtime_entrypoint"} & modules:
         parts.append(_TOOL_WRAPPER)
+    if {"model_adapter", "runtime_entrypoint"} & modules:
+        parts.append(_AUTO_PATCH)
     return "".join(parts)
 
 

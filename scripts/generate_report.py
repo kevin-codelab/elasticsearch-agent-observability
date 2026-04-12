@@ -68,12 +68,14 @@ def build_report(result: dict) -> dict[str, Any]:
     success_rate = round((total - with_errors) / total, 4) if total else 0.0
     tool_error_rate = round(tool_errors / tool_calls, 4) if tool_calls else 0.0
     percentiles = result.get("aggregations", {}).get("latency_percentiles", {}).get("values", {})
+    p50_ns = percentiles.get("50.0", 0) or 0
+    p95_ns = percentiles.get("95.0", 0) or 0
     return {
         "documents": total,
         "success_rate": success_rate,
         "tool_error_rate": tool_error_rate,
-        "p50_latency_ms": percentiles.get("50.0", 0),
-        "p95_latency_ms": percentiles.get("95.0", 0),
+        "p50_latency_ms": round(p50_ns / 1_000_000, 2) if p50_ns else 0,
+        "p95_latency_ms": round(p95_ns / 1_000_000, 2) if p95_ns else 0,
         "retry_total": result.get("aggregations", {}).get("retry_sum", {}).get("value", 0),
         "token_input_total": result.get("aggregations", {}).get("token_input_sum", {}).get("value", 0),
         "token_output_total": result.get("aggregations", {}).get("token_output_sum", {}).get("value", 0),
@@ -132,7 +134,7 @@ def main() -> int:
         credentials = validate_credential_pair(args.es_user, args.es_password)
         index_prefix = validate_index_prefix(config.get("index_prefix", "agent-obsv"))
         events_alias = str(config.get("events_alias") or build_events_alias(index_prefix)).strip()
-        time_field = str(config.get("time_field") or "captured_at").strip() or "captured_at"
+        time_field = str(config.get("time_field") or "@timestamp").strip() or "@timestamp"
         time_range = args.time_range if args.time_range != "now-24h" else config.get("time_range", "now-24h")
         es_config = ESConfig(
             es_url=args.es_url,

@@ -189,6 +189,37 @@ class ContractsAndSecurityTests(unittest.TestCase):
         relative = {path.relative_to(root).as_posix() for path in files}
         self.assertEqual(relative, {"app/agent.py"})
 
+    def test_report_latency_converts_ns_to_ms(self) -> None:
+        """Verify that build_report properly converts event.duration (ns) to ms."""
+        mock_result = {
+            "hits": {"total": {"value": 100}},
+            "aggregations": {
+                "with_errors": {"doc_count": 5},
+                "tool_calls": {"doc_count": 50},
+                "tool_errors": {"doc_count": 2},
+                "latency_percentiles": {"values": {"50.0": 500_000_000, "95.0": 2_000_000_000}},
+                "retry_sum": {"value": 3},
+                "token_input_sum": {"value": 1000},
+                "token_output_sum": {"value": 500},
+                "cost_sum": {"value": 0.5},
+                "top_tools": {"buckets": []},
+                "top_models": {"buckets": []},
+                "mcp_methods": {"buckets": []},
+                "error_types": {"buckets": []},
+            },
+        }
+        report = generate_report.build_report(mock_result)
+        self.assertEqual(report["p50_latency_ms"], 500.0)
+        self.assertEqual(report["p95_latency_ms"], 2000.0)
+
+    def test_esconfig_has_verify_tls_and_kibana_api_key(self) -> None:
+        config = common.ESConfig(es_url="http://localhost:9200")
+        self.assertTrue(config.verify_tls)
+        self.assertIsNone(config.kibana_api_key)
+        config2 = common.ESConfig(es_url="http://localhost:9200", verify_tls=False, kibana_api_key="test-key")
+        self.assertFalse(config2.verify_tls)
+        self.assertEqual(config2.kibana_api_key, "test-key")
+
 
 if __name__ == "__main__":
     unittest.main()

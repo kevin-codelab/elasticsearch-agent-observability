@@ -9,6 +9,7 @@ import json
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -30,6 +31,45 @@ from common import (
 RESOURCE_ALREADY_EXISTS = "resource_already_exists_exception"
 
 
+def sanity_check(config: ESConfig, *, index_prefix: str) -> dict[str, Any]:
+    """Write a test document, refresh, query, and delete it to verify the pipeline is working end-to-end."""
+    import time
+    ds_name = build_data_stream_name(index_prefix)
+    test_doc = {
+        "@timestamp": datetime.now(timezone.utc).isoformat(),
+        "event.action": "_sanity_check",
+        "event.kind": "event",
+        "event.outcome": "success",
+        "service.name": "sanity-check",
+        "gen_ai.agent.tool_name": "_sanity_check_tool",
+        "gen_ai.agent.signal_type": "sanity_check",
+        "message": "End-to-end sanity check document",
+    }
+    try:
+        index_result = es_request(config, "POST", f"/{ds_name}/_doc", test_doc)
+        doc_id = index_result.get("_id", "")
+        if not doc_id:
+            return {"status": "failed", "reason": "Index returned no _id", "detail": index_result}
+        es_request(config, "POST", f"/{ds_name}/_refresh")
+        time.sleep(0.5)
+        query = {"query": {"term": {"event.action": "_sanity_check"}}, "size": 1}
+        search_result = es_request(config, "POST", f"/{ds_name}/_search", query)
+        hits = search_result.get("hits", {}).get("total", {}).get("value", 0)
+        if hits < 1:
+            return {"status": "failed", "reason": "Sanity check doc not found after indexing", "doc_id": doc_id}
+        found_doc = search_result["hits"]["hits"][0]["_source"]
+        pipeline_applied = found_doc.get("observer.product") == "elasticsearch-agent-observability"
+        es_request(config, "POST", f"/{ds_name}/_delete_by_query", {"query": {"term": {"event.action": "_sanity_check"}}})
+        return {
+            "status": "passed",
+            "doc_id": doc_id,
+            "pipeline_applied": pipeline_applied,
+            "indexed_fields_sample": list(found_doc.keys())[:10],
+        }
+    except SkillError as exc:
+        return {"status": "failed", "reason": str(exc)}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Apply generated Elasticsearch observability assets")
     parser.add_argument("--assets-dir", required=True)
@@ -41,6 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kibana-url", default="", help="Optional Kibana base URL for applying saved objects")
     parser.add_argument("--kibana-space", default="default")
     parser.add_argument("--skip-kibana-assets", action="store_true", help="Skip applying Kibana saved objects even if present")
+    parser.add_argument("--dry-run", action="store_true", help="Print what would be applied without actually sending requests")
     return parser.parse_args()
 
 
@@ -68,14 +109,22 @@ def kibana_request(config: ESConfig, kibana_url: str, method: str, path: str, pa
     request = urllib.request.Request(url, method=method.upper())
     request.add_header("Content-Type", "application/json")
     request.add_header("kbn-xsrf", "true")
-    if config.es_user and config.es_password:
+    if config.kibana_api_key:
+        request.add_header("Authorization", f"ApiKey {config.kibana_api_key}")
+    elif config.es_user and config.es_password:
         token = base64.b64encode(f"{config.es_user}:{config.es_password}".encode("utf-8")).decode("ascii")
         request.add_header("Authorization", f"Basic {token}")
     body = body_bytes
     if body is None and payload is not None:
         body = json.dumps(payload).encode("utf-8")
+    import ssl
+    context = None
+    if not config.verify_tls:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
     try:
-        with urllib.request.urlopen(request, data=body, timeout=config.timeout_seconds) as response:  # noqa: S310
+        with urllib.request.urlopen(request, data=body, timeout=config.timeout_seconds, context=context) as response:  # noqa: S310
             text = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
@@ -174,12 +223,36 @@ def apply_assets(
     kibana_url: str | None = None,
     kibana_space: str = "default",
     apply_kibana: bool = True,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     validated_prefix = validate_index_prefix(index_prefix)
     assets = load_assets(assets_dir)
     template_name = f"{validated_prefix}-events-template"
     pipeline_name = f"{validated_prefix}-normalize"
     ilm_name = f"{validated_prefix}-lifecycle"
+
+    if dry_run:
+        plan: list[dict[str, str]] = [
+            {"action": "PUT", "path": f"/_ilm/policy/{ilm_name}", "asset": "ilm_policy"},
+            {"action": "PUT", "path": f"/_ingest/pipeline/{pipeline_name}", "asset": "ingest_pipeline"},
+        ]
+        if assets.get("component_template_ecs_base"):
+            plan.append({"action": "PUT", "path": f"/_component_template/{build_component_template_name(validated_prefix, 'ecs-base')}", "asset": "component_template_ecs_base"})
+        if assets.get("component_template_settings"):
+            plan.append({"action": "PUT", "path": f"/_component_template/{build_component_template_name(validated_prefix, 'settings')}", "asset": "component_template_settings"})
+        plan.append({"action": "PUT", "path": f"/_index_template/{template_name}", "asset": "index_template"})
+        if bootstrap_index:
+            plan.append({"action": "PUT", "path": f"/_data_stream/{build_data_stream_name(validated_prefix)}", "asset": "data_stream"})
+        if apply_kibana and kibana_url and assets.get("kibana_saved_objects"):
+            objects = assets["kibana_saved_objects"].get("objects", [])
+            for obj in objects:
+                plan.append({"action": "POST", "path": f"/api/saved_objects/{obj.get('type')}/{obj.get('id')}", "asset": f"kibana:{obj.get('type')}"})
+        return {
+            "dry_run": True,
+            "plan": plan,
+            "plan_count": len(plan),
+            "index_prefix": validated_prefix,
+        }
 
     responses: dict[str, Any] = {
         "ilm_policy": es_request(config, "PUT", f"/_ilm/policy/{ilm_name}", assets["ilm_policy"]),
@@ -244,7 +317,13 @@ def main() -> int:
             kibana_url=args.kibana_url or None,
             kibana_space=args.kibana_space,
             apply_kibana=not args.skip_kibana_assets,
+            dry_run=args.dry_run,
         )
+        if summary.get("dry_run"):
+            print(f"🔍 Dry-run: {summary['plan_count']} operation(s) would be applied")
+            for step in summary["plan"]:
+                print(f"   {step['action']} {step['path']}  ({step['asset']})")
+            return 0
         print("✅ Elasticsearch assets applied")
         print(f"   data stream: {summary['data_stream']}")
         if summary["bootstrap_index"]:

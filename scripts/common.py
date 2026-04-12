@@ -37,6 +37,8 @@ class ESConfig:
     es_user: str | None = None
     es_password: str | None = None
     timeout_seconds: int = 15
+    verify_tls: bool = True
+    kibana_api_key: str | None = None
 
 
 def utcnow_iso() -> str:
@@ -187,8 +189,14 @@ def es_request(config: ESConfig, method: str, path: str, payload: dict | None = 
     body = None
     if payload is not None:
         body = json.dumps(payload).encode("utf-8")
+    import ssl
+    context = None
+    if not config.verify_tls:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
     try:
-        with urllib.request.urlopen(request, data=body, timeout=config.timeout_seconds) as response:  # noqa: S310
+        with urllib.request.urlopen(request, data=body, timeout=config.timeout_seconds, context=context) as response:  # noqa: S310
             text = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")

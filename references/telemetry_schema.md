@@ -1,38 +1,32 @@
 # Telemetry Schema
 
-## Minimum shared fields
+## Minimum shared fields (legacy → ECS)
 
-The repo normalizes around these fields first:
+The repo accepts these legacy field names on ingestion and automatically renames them to ECS via the ingest pipeline:
 
-- `agent_id`
-- `run_id`
-- `turn_id`
-- `span_id`
-- `parent_span_id`
-- `signal_type`
-- `semantic_kind`
-- `agent.module`
-- `agent.module_kind`
-- `tool_name`
-- `model_name`
-- `latency_ms`
-- `token_input`
-- `token_output`
-- `cost`
-- `error_type`
-- `retry_count`
-- `mcp_method_name`
-- `session_id`
-- `captured_at`
+| Legacy field | ECS field |
+|---|---|
+| `agent_id` | `agent.id` |
+| `run_id` | `gen_ai.agent.run_id` |
+| `turn_id` | `gen_ai.agent.turn_id` |
+| `span_id` | `span.id` |
+| `parent_span_id` | `parent.id` |
+| `signal_type` | `gen_ai.agent.signal_type` |
+| `semantic_kind` | `gen_ai.agent.semantic_kind` |
+| `tool_name` | `gen_ai.agent.tool_name` |
+| `model_name` | `gen_ai.agent.model_name` |
+| `latency_ms` | `gen_ai.agent.latency_ms` (also computes `event.duration` in ns) |
+| `token_input` | `gen_ai.usage.input_tokens` |
+| `token_output` | `gen_ai.usage.output_tokens` |
+| `cost` | `gen_ai.agent.cost` |
+| `error_type` | `gen_ai.agent.error_type` |
+| `retry_count` | `gen_ai.agent.retry_count` |
+| `mcp_method_name` | `gen_ai.agent.mcp_method_name` |
+| `session_id` | `gen_ai.agent.session_id` |
+| `captured_at` | alias → `@timestamp` |
 
-## Why this schema
+ECS fields (`@timestamp`, `event.outcome`, `service.name`, etc.) are also accepted directly and won't be renamed.
 
-These fields are enough to support:
+## Time field
 
-- latency views
-- tool and model breakdowns
-- retry and error analysis
-- MCP-aware breakdowns
-- module-level aggregation after architecture discovery
-
-The schema is intentionally small enough to stay usable, but rich enough to grow later.
+The canonical time field is `@timestamp`. `captured_at` is kept as an alias for backward compatibility.

@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from apply_elasticsearch_assets import apply_assets
+from apply_elasticsearch_assets import apply_assets, sanity_check
 from common import (
     ESConfig,
     SkillError,
@@ -63,6 +63,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apm-server-url", default="")
     parser.add_argument("--agent-id", default="", help="Optional agent identifier for multi-agent setups")
     parser.add_argument("--generate-instrument-snippet", action="store_true", help="Generate a Python auto-instrumentation starter file")
+    parser.add_argument("--no-verify-tls", action="store_true", help="Disable TLS certificate verification for ES and Kibana requests")
+    parser.add_argument("--kibana-api-key", default="", help="Optional Kibana API key (instead of reusing ES Basic Auth)")
     return parser.parse_args()
 
 
@@ -192,7 +194,7 @@ def build_summary(
 def write_report(*, es_config: ESConfig, report_config_path: Path, output: Path, time_range: str, output_format: str | None) -> Path:
     report_config = json.loads(Path(report_config_path).read_text(encoding="utf-8"))
     events_alias = str(report_config.get("events_alias", "")).strip()
-    time_field = str(report_config.get("time_field") or "captured_at").strip() or "captured_at"
+    time_field = str(report_config.get("time_field") or "@timestamp").strip() or "@timestamp"
     result = es_request(es_config, "POST", f"/{events_alias}/_search", search_payload(time_range, time_field=time_field))
     report = build_report(result)
     resolved_output = output.expanduser().resolve()
@@ -297,6 +299,8 @@ def main() -> int:
             es_url=args.es_url,
             es_user=credentials[0] if credentials else None,
             es_password=credentials[1] if credentials else None,
+            verify_tls=not args.no_verify_tls,
+            kibana_api_key=args.kibana_api_key.strip() or None,
         )
         if args.apply_es_assets or args.apply_kibana_assets:
             apply_summary = apply_assets(
@@ -310,6 +314,12 @@ def main() -> int:
             )
             apply_summary_path = assets_dir / "apply-summary.json"
             write_json(apply_summary_path, apply_summary)
+            sanity_result = sanity_check(es_config, index_prefix=index_prefix)
+            write_json(assets_dir / "sanity-check.json", sanity_result)
+            if sanity_result.get("status") == "passed":
+                print(f"   ✅ sanity check passed (pipeline_applied={sanity_result.get('pipeline_applied')})")
+            else:
+                print(f"   ⚠️  sanity check failed: {sanity_result.get('reason', 'unknown')}")
 
         report_output_arg = args.report_output
         if not report_output_arg and args.apply_es_assets:
@@ -343,6 +353,10 @@ def main() -> int:
             notes.append("Use `run-collector.sh` to start the Collector and `agent-otel.env` as the runtime env template for the agent process.")
         if native_assets_paths:
             notes.append("Use the `elastic-native` bundle when the operator prefers Fleet enrollment or APM/OTLP hybrid wiring instead of Collector-only mode.")
+        notes.append(
+            f"Use `alert_and_diagnose.py --es-url {args.es_url} --index-prefix {index_prefix} --time-range now-15m` to run alert checks with root-cause analysis. "
+            "Add `--write-to-es` to persist alert history, `--generate-crontab` for scheduling, or `--webhook-url` for push notifications."
+        )
 
         summary_path = output_dir / "bootstrap-summary.md"
         write_text(

@@ -2,7 +2,7 @@
 """Render Elasticsearch 9.x assets for agent observability.
 
 Upgraded to use data streams, ECS-compatible mappings, component templates,
-tiered ILM, structured ingest parsing, Lens visualizations, and alerting rules.
+tiered ILM, structured ingest parsing, and Lens visualizations.
 """
 
 from __future__ import annotations
@@ -277,7 +277,7 @@ def build_ilm_policy(retention_days: int) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Kibana saved objects — with Lens visualizations and alerting
+# Kibana saved objects — Lens visualizations, searches, and dashboard
 # ---------------------------------------------------------------------------
 
 def _search_source(data_view_id: str, query: str = "") -> dict[str, Any]:

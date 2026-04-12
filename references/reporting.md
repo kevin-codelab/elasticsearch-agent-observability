@@ -47,7 +47,9 @@ Do not claim retry breakdown or timeout breakdown unless the implementation actu
 `report-config.json` defines the reporting time field.
 Current default:
 
-- `captured_at`
+- `@timestamp`
+
+`captured_at` is kept as an alias for backward compatibility.
 
 Both the smoke report query and the Kibana entry surface should follow the same time-field contract.
 

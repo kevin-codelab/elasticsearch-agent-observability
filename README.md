@@ -16,9 +16,10 @@ What it does well:
 - recommend an ingest mode (`collector` / `elastic-agent-fleet` / `apm-otlp-hybrid`)
 - render OTel Collector config with **traces + logs + metrics pipelines**, spanmetrics connector, filelog receiver, and probabilistic sampling
 - render an Elastic-native starter bundle for Fleet / APM operators
-- render Elasticsearch assets using **data streams**, **ECS-compatible mappings**, **component templates**, and **tiered ILM** (hot → warm → cold → frozen → delete)
+- render Elasticsearch assets using **data streams**, **ECS-compatible mappings**, **component templates**, and **tiered ILM** (hot → warm → cold → delete)
 - render a structured ingest pipeline with ECS field alignment, JSON body parsing, GenAI SemConv preservation, and legacy field migration
-- render Kibana saved objects including **Lens visualizations** (event rate, latency, top tools, token usage), **starter dashboard**, **failure search**, and an **error-rate alerting rule**
+- render Kibana saved objects including **Lens visualizations** (event rate, latency, top tools, token usage), **starter dashboard**, and **failure search**
+- run alert checks with **intelligent root-cause analysis** via `alert_and_diagnose.py` (no Kibana Alerting license needed)
 - optionally apply all of the above to a live cluster
 - generate a Python auto-instrumentation bootstrap file with `traced_tool_call` / `traced_model_call` decorators
 - generate a smoke report from the same reporting contract
@@ -76,7 +77,7 @@ generated/bootstrap/
 │   ├── component-template-settings.json
 │   ├── index-template.json           ← data stream backed
 │   ├── ingest-pipeline.json           ← ECS + structured parsing
-│   ├── ilm-policy.json               ← hot/warm/cold/frozen/delete
+│   ├── ilm-policy.json               ← hot/warm/cold/delete
 │   ├── report-config.json
 │   ├── kibana-saved-objects.json
 │   ├── kibana-saved-objects.ndjson
@@ -106,7 +107,20 @@ The generated Kibana bundle now includes:
 | Top tools | lens (pie) | Most-called agent tools |
 | Token usage | lens (XY) | Input vs output token trend |
 | Overview dashboard | dashboard | All of the above in one view |
-| Error rate alert | alert | Fires when error count > 10 in 5 min |
+
+### Alert & Root-Cause Analysis (standalone script)
+
+The repo includes `alert_and_diagnose.py` — a standalone alert checker with intelligent root-cause analysis that does not require Kibana Alerting (which needs a paid license).
+
+```bash
+python scripts/alert_and_diagnose.py \
+  --es-url http://localhost:9200 \
+  --index-prefix agent-obsv \
+  --time-range now-15m \
+  --webhook-url https://hooks.slack.com/...
+```
+
+Three checks: **error-rate spike**, **token consumption anomaly**, **latency degradation**. Each triggered alert includes: Phenomenon → Root cause → Recommendation.
 
 ## Current Boundaries
 
@@ -114,8 +128,7 @@ The generated Kibana bundle now includes:
 - the auto-instrument snippet requires `opentelemetry-sdk` + `opentelemetry-exporter-otlp-proto-grpc` to be installed
 - the Elastic-native bundle is render-only; it does not call Fleet APIs
 - normalization handles JSON body parsing and ECS field mapping, but is not a full schema parser
-- the frozen tier config assumes a `found-snapshots` repository; operators should adjust for their cluster
-- alerting rules are disabled by default; operators enable and route actions in Kibana
+- all generated assets work on the **Basic** (free) Elasticsearch license — no paid features required
 
 ## Security Defaults
 

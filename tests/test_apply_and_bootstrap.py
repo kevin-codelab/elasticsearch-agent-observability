@@ -103,6 +103,34 @@ class ApplyAndBootstrapTests(unittest.TestCase):
         self.assertIn('source "$SCRIPT_DIR/agent-otel.env"', launcher)
         self.assertIn('--config "$SCRIPT_DIR/otel-collector.generated.yaml"', launcher)
 
+    def test_apply_assets_dry_run_returns_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            assets_dir = Path(tmp_dir)
+            (assets_dir / "component-template-ecs-base.json").write_text('{"template": {"mappings": {}}}', encoding="utf-8")
+            (assets_dir / "component-template-settings.json").write_text('{"template": {"settings": {}}}', encoding="utf-8")
+            (assets_dir / "index-template.json").write_text('{"index_patterns": ["agent-obsv-events*"], "data_stream": {}}', encoding="utf-8")
+            (assets_dir / "ingest-pipeline.json").write_text('{"processors": []}', encoding="utf-8")
+            (assets_dir / "ilm-policy.json").write_text('{"policy": {"phases": {}}}', encoding="utf-8")
+            (assets_dir / "report-config.json").write_text('{"events_alias": "agent-obsv-events"}', encoding="utf-8")
+            (assets_dir / "kibana-saved-objects.json").write_text('{"objects": [{"type": "index-pattern", "id": "test-view"}]}', encoding="utf-8")
+            summary = apply_elasticsearch_assets.apply_assets(
+                ESConfig(es_url="http://localhost:9200"),
+                assets_dir=assets_dir,
+                index_prefix="agent-obsv",
+                bootstrap_index=True,
+                kibana_url="http://localhost:5601",
+                apply_kibana=True,
+                dry_run=True,
+            )
+        self.assertTrue(summary["dry_run"])
+        self.assertGreater(summary["plan_count"], 0)
+        actions = [step["action"] for step in summary["plan"]]
+        self.assertIn("PUT", actions)
+        paths = [step["path"] for step in summary["plan"]]
+        self.assertTrue(any("_ilm/policy" in p for p in paths))
+        self.assertTrue(any("_data_stream" in p for p in paths))
+        self.assertTrue(any("saved_objects" in p for p in paths))
+
 
 if __name__ == "__main__":
     unittest.main()

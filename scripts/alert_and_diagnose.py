@@ -61,6 +61,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", help="Optional output file (JSON)")
     parser.add_argument("--output-format", choices=["json", "markdown", "text"], default="text")
     parser.add_argument("--webhook-url", default="", help="Optional webhook URL for push notification")
+    parser.add_argument("--write-to-es", action="store_true", help="Write alert results back to ES as a .alerts data stream")
+    parser.add_argument("--generate-crontab", action="store_true", help="Print a crontab entry for scheduling this check")
     return parser.parse_args()
 
 
@@ -170,11 +172,11 @@ def _analyze_latency_degradation(current: dict[str, Any], baseline: dict[str, An
     aggs = current.get("aggregations", {})
     b_aggs = baseline.get("aggregations", {})
     p95_ns = aggs.get("p95_latency", {}).get("values", {}).get("95.0", 0) or 0
-    p95_ms = p95_ns / 1_000_000 if p95_ns > 100_000 else p95_ns
+    p95_ms = p95_ns / 1_000_000
     if p95_ms < threshold_ms:
         return None
     baseline_p95_ns = b_aggs.get("p95_latency", {}).get("values", {}).get("95.0", 0) or 0
-    baseline_p95_ms = baseline_p95_ns / 1_000_000 if baseline_p95_ns > 100_000 else baseline_p95_ns
+    baseline_p95_ms = baseline_p95_ns / 1_000_000
     top_tools = _extract_buckets(aggs.get("top_latency_tools", {}))
     primary_tool = top_tools[0]["key"] if top_tools else "unknown"
     return {
@@ -231,6 +233,70 @@ def _send_webhook(url: str, payload: dict[str, Any]) -> None:
             _ = response.read()
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️ webhook delivery failed: {exc}", file=sys.stderr)
+
+
+def _write_alert_to_es(config: ESConfig, index_prefix: str, result: dict[str, Any]) -> None:
+    """Write alert check results back to ES as a .alerts data stream for Kibana consumption."""
+    alerts_ds = f"{index_prefix}-alerts"
+    for alert in result.get("alerts", []):
+        doc = {
+            "@timestamp": result["checked_at"],
+            "event.kind": "alert",
+            "event.category": "process",
+            "event.action": alert["alert_type"],
+            "event.outcome": "failure",
+            "service.name": "alert-and-diagnose",
+            "gen_ai.agent.signal_type": "alert_check",
+            "alert.severity": alert["severity"],
+            "alert.phenomenon": alert["phenomenon"],
+            "alert.root_cause": alert["root_cause"],
+            "alert.recommendation": alert["recommendation"],
+            "message": f"[{alert['severity'].upper()}] {alert['alert_type']}: {alert['phenomenon']}",
+        }
+        try:
+            es_request(config, "POST", f"/{alerts_ds}/_doc", doc)
+        except SkillError as exc:
+            print(f"⚠️ failed to write alert to ES: {exc}", file=sys.stderr)
+    if not result.get("alerts"):
+        doc = {
+            "@timestamp": result["checked_at"],
+            "event.kind": "alert",
+            "event.category": "process",
+            "event.action": "alert_check_ok",
+            "event.outcome": "success",
+            "service.name": "alert-and-diagnose",
+            "gen_ai.agent.signal_type": "alert_check",
+            "message": "No alerts triggered",
+        }
+        try:
+            es_request(config, "POST", f"/{alerts_ds}/_doc", doc)
+        except SkillError as exc:
+            print(f"⚠️ failed to write alert status to ES: {exc}", file=sys.stderr)
+
+
+def _print_crontab(args: Any) -> None:
+    """Print a ready-to-use crontab entry for scheduling this check."""
+    cmd_parts = [
+        "python scripts/alert_and_diagnose.py",
+        f"--es-url {args.es_url}",
+        f"--index-prefix {args.index_prefix}",
+        f"--time-range {args.time_range}",
+    ]
+    if args.es_user:
+        cmd_parts.append(f"--es-user {args.es_user}")
+        cmd_parts.append("--es-password $ALERT_ES_PASSWORD")
+    if args.webhook_url:
+        cmd_parts.append(f"--webhook-url {args.webhook_url}")
+    if args.write_to_es:
+        cmd_parts.append("--write-to-es")
+    cmd = " ".join(cmd_parts)
+    print("\n# --- Crontab entry (every 15 minutes) ---")
+    print(f"*/15 * * * * cd /path/to/elasticsearch-agent-observability && {cmd}")
+    print("# ---")
+    print("\n# --- systemd timer alternative ---")
+    print(f"# ExecStart={cmd}")
+    print("# OnCalendar=*:0/15")
+    print("# ---")
 
 
 def render_text(result: dict[str, Any]) -> str:
@@ -297,6 +363,10 @@ def main() -> int:
             print(render_text(result))
         if args.webhook_url and result["status"] == "alert":
             _send_webhook(args.webhook_url, result)
+        if args.write_to_es:
+            _write_alert_to_es(config, args.index_prefix, result)
+        if args.generate_crontab:
+            _print_crontab(args)
         return 0 if result["status"] == "ok" else 2
     except SkillError as exc:
         print_error(str(exc))
