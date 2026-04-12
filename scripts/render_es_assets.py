@@ -241,7 +241,6 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
 def build_ilm_policy(retention_days: int) -> dict[str, Any]:
     warm_age = max(1, retention_days // 5)
     cold_age = max(warm_age + 1, retention_days // 2)
-    frozen_age = max(cold_age + 1, int(retention_days * 0.8))
     return {
         "policy": {
             "phases": {
@@ -266,14 +265,6 @@ def build_ilm_policy(retention_days: int) -> dict[str, Any]:
                     "min_age": f"{cold_age}d",
                     "actions": {
                         "readonly": {},
-                    },
-                },
-                "frozen": {
-                    "min_age": f"{frozen_age}d",
-                    "actions": {
-                        "searchable_snapshot": {
-                            "snapshot_repository": "found-snapshots",
-                        }
                     },
                 },
                 "delete": {
@@ -519,7 +510,6 @@ def build_kibana_saved_objects(index_prefix: str) -> dict[str, Any]:
     lens_latency_id = f"{index_prefix}-lens-latency"
     lens_top_tools_id = f"{index_prefix}-lens-top-tools"
     lens_token_usage_id = f"{index_prefix}-lens-token-usage"
-    alert_error_rate_id = f"{index_prefix}-alert-error-rate"
 
     objects: list[dict[str, Any]] = [
         {
@@ -561,7 +551,6 @@ def build_kibana_saved_objects(index_prefix: str) -> dict[str, Any]:
                 {"id": failure_search_id, "type": "search", "width": "24", "height": "15"},
             ],
         ),
-        _build_alert_rule(object_id=alert_error_rate_id, data_view_id=data_view_id, index_prefix=index_prefix),
     ]
     return {
         "space": "default",
@@ -572,7 +561,6 @@ def build_kibana_saved_objects(index_prefix: str) -> dict[str, Any]:
             "failure_search_id": failure_search_id,
             "dashboard_id": dashboard_id,
             "lens_ids": [lens_event_rate_id, lens_latency_id, lens_top_tools_id, lens_token_usage_id],
-            "alert_ids": [alert_error_rate_id],
             "events_alias_pattern": f"{ds_name}*",
             "object_count": len(objects),
         },

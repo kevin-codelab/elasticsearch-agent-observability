@@ -119,7 +119,7 @@ class ContractsAndSecurityTests(unittest.TestCase):
         self.assertIn("hot", phases)
         self.assertIn("warm", phases)
         self.assertIn("cold", phases)
-        self.assertIn("frozen", phases)
+        self.assertNotIn("frozen", phases)
         self.assertIn("delete", phases)
 
     def test_ingest_pipeline_does_ecs_rename_and_structured_parsing(self) -> None:
@@ -133,15 +133,16 @@ class ContractsAndSecurityTests(unittest.TestCase):
         set_processors = [item["set"] for item in pipeline["processors"] if "set" in item]
         self.assertTrue(any(proc.get("field") == "@timestamp" for proc in set_processors))
 
-    def test_kibana_objects_include_lens_and_alert(self) -> None:
+    def test_kibana_objects_include_lens_no_paid_features(self) -> None:
         bundle = render_es_assets.build_kibana_saved_objects("agent-obsv")
         types = {obj["type"] for obj in bundle["objects"]}
         self.assertIn("lens", types)
         self.assertIn("dashboard", types)
-        self.assertIn("alert", types)
+        self.assertNotIn("alert", types)
         self.assertIn("search", types)
         self.assertIn("index-pattern", types)
-        self.assertGreaterEqual(bundle["summary"]["object_count"], 8)
+        self.assertGreaterEqual(bundle["summary"]["object_count"], 7)
+        self.assertNotIn("alert_ids", bundle["summary"])
 
     def test_report_config_uses_data_stream_and_timestamp(self) -> None:
         report_config = render_es_assets.build_report_config("agent-obsv", DISCOVERY_SAMPLE)
@@ -162,6 +163,11 @@ class ContractsAndSecurityTests(unittest.TestCase):
         self.assertTrue(any("credentials were not written to disk" in note for note in notes))
         self.assertTrue(any("agent-obsv-events" in note for note in notes))
         self.assertTrue(any("Selected ingest mode" in note for note in notes))
+
+    def test_search_payload_uses_ecs_fields_by_default(self) -> None:
+        payload = generate_report.search_payload("now-24h")
+        self.assertIn("@timestamp", payload["query"]["range"])
+        self.assertIn("gen_ai.agent.tool_name", str(payload["aggs"]))
 
     def test_search_payload_uses_custom_time_field(self) -> None:
         payload = generate_report.search_payload("now-24h", time_field="event.ingested")

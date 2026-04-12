@@ -33,29 +33,29 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def search_payload(time_range: str, time_field: str = "captured_at") -> dict[str, Any]:
+def search_payload(time_range: str, time_field: str = "@timestamp") -> dict[str, Any]:
     return {
         "size": 0,
         "query": {"range": {time_field: {"gte": time_range}}},
         "aggs": {
-            "with_errors": {"filter": {"exists": {"field": "error_type"}}},
-            "tool_calls": {"filter": {"exists": {"field": "tool_name"}}},
+            "with_errors": {"filter": {"term": {"event.outcome": "failure"}}},
+            "tool_calls": {"filter": {"exists": {"field": "gen_ai.agent.tool_name"}}},
             "tool_errors": {
                 "filter": {
                     "bool": {
-                        "must": [{"exists": {"field": "tool_name"}}, {"exists": {"field": "error_type"}}]
+                        "must": [{"exists": {"field": "gen_ai.agent.tool_name"}}, {"term": {"event.outcome": "failure"}}]
                     }
                 }
             },
-            "latency_percentiles": {"percentiles": {"field": "latency_ms", "percents": [50, 95]}},
-            "retry_sum": {"sum": {"field": "retry_count"}},
-            "token_input_sum": {"sum": {"field": "token_input"}},
-            "token_output_sum": {"sum": {"field": "token_output"}},
-            "cost_sum": {"sum": {"field": "cost"}},
-            "top_tools": {"terms": {"field": "tool_name", "size": 5}},
-            "top_models": {"terms": {"field": "model_name", "size": 5}},
-            "mcp_methods": {"terms": {"field": "mcp_method_name", "size": 5}},
-            "error_types": {"terms": {"field": "error_type", "size": 5}},
+            "latency_percentiles": {"percentiles": {"field": "event.duration", "percents": [50, 95]}},
+            "retry_sum": {"sum": {"field": "gen_ai.agent.retry_count"}},
+            "token_input_sum": {"sum": {"field": "gen_ai.usage.input_tokens"}},
+            "token_output_sum": {"sum": {"field": "gen_ai.usage.output_tokens"}},
+            "cost_sum": {"sum": {"field": "gen_ai.agent.cost"}},
+            "top_tools": {"terms": {"field": "gen_ai.agent.tool_name", "size": 5}},
+            "top_models": {"terms": {"field": "gen_ai.agent.model_name", "size": 5}},
+            "mcp_methods": {"terms": {"field": "gen_ai.agent.mcp_method_name", "size": 5}},
+            "error_types": {"terms": {"field": "gen_ai.agent.error_type", "size": 5}},
         },
     }
 
