@@ -70,6 +70,23 @@ class ContractsAndSecurityTests(unittest.TestCase):
         self.assertIn("spanmetrics", rendered)
         self.assertIn("elasticsearch/metrics", rendered)
 
+    def test_render_config_uses_conservative_spanmetrics_shape(self) -> None:
+        rendered = render_collector_config.render_config(
+            DISCOVERY_SAMPLE,
+            es_url="http://localhost:9200",
+            index_prefix="agent-obsv",
+            environment="dev",
+            service_name="agent-runtime",
+        )
+        self.assertIn("connectors:\n  spanmetrics:\n    dimensions:", rendered)
+        self.assertNotIn("histogram:", rendered)
+
+    def test_spanmetrics_dimensions_are_normalized(self) -> None:
+        normalized = render_collector_config._normalize_spanmetrics_dimensions(
+            ["service.name", " event.outcome ", "service.name", "", "gen_ai.agent.tool_name"]
+        )
+        self.assertEqual(normalized, ["service.name", "event.outcome", "gen_ai.agent.tool_name"])
+
     def test_render_config_supports_filelog_receiver(self) -> None:
         rendered = render_collector_config.render_config(
             DISCOVERY_SAMPLE,
@@ -95,6 +112,28 @@ class ContractsAndSecurityTests(unittest.TestCase):
         self.assertIn("probabilistic_sampler", rendered)
         self.assertIn("50.0", rendered)
 
+    def test_render_config_sets_explicit_telemetry_metrics_port(self) -> None:
+        rendered = render_collector_config.render_config(
+            DISCOVERY_SAMPLE,
+            es_url="http://localhost:9200",
+            index_prefix="agent-obsv",
+            environment="dev",
+            service_name="agent-runtime",
+            telemetry_metrics_port=18888,
+        )
+        self.assertIn('address: "127.0.0.1:18888"', rendered)
+
+    def test_render_config_forces_ecs_mapping_mode(self) -> None:
+        rendered = render_collector_config.render_config(
+            DISCOVERY_SAMPLE,
+            es_url="http://localhost:9200",
+            index_prefix="agent-obsv",
+            environment="dev",
+            service_name="agent-runtime",
+        )
+        self.assertIn('set(attributes["elastic.mapping.mode"], "ecs")', rendered)
+        self.assertIn("transform/elastic_mapping", rendered)
+
     def test_index_template_uses_data_streams(self) -> None:
         template = render_es_assets.build_index_template("agent-obsv", ["tool_registry"])
         self.assertIn("data_stream", template)
@@ -110,8 +149,14 @@ class ContractsAndSecurityTests(unittest.TestCase):
         self.assertIn("trace.id", props)
         self.assertIn("gen_ai.usage.input_tokens", props)
         self.assertIn("gen_ai.agent.tool_name", props)
-        self.assertIn("captured_at", props)
-        self.assertEqual(props["captured_at"]["type"], "alias")
+        self.assertNotIn("captured_at", props)
+        self.assertIn("gen_ai.agent.component_type", props)
+        self.assertIn("gen_ai.guardrail.action", props)
+        self.assertIn("gen_ai.guardrail.category", props)
+        self.assertIn("gen_ai.evaluation.score", props)
+        self.assertIn("gen_ai.evaluation.outcome", props)
+        self.assertIn("gen_ai.agent.retrieval_latency_ms", props)
+        self.assertIn("gen_ai.agent.cache_hit", props)
 
     def test_ilm_policy_has_tiered_phases(self) -> None:
         ilm = render_es_assets.build_ilm_policy(30)
@@ -122,12 +167,12 @@ class ContractsAndSecurityTests(unittest.TestCase):
         self.assertNotIn("frozen", phases)
         self.assertIn("delete", phases)
 
-    def test_ingest_pipeline_does_ecs_rename_and_structured_parsing(self) -> None:
+    def test_ingest_pipeline_is_ecs_native_and_structured_parsing(self) -> None:
         pipeline = render_es_assets.build_ingest_pipeline(["tool_registry"])
         processor_types = []
         for item in pipeline["processors"]:
             processor_types.extend(item.keys())
-        self.assertIn("rename", processor_types)
+        self.assertNotIn("rename", processor_types)
         self.assertIn("json", processor_types)
         self.assertIn("script", processor_types)
         set_processors = [item["set"] for item in pipeline["processors"] if "set" in item]
@@ -153,6 +198,22 @@ class ContractsAndSecurityTests(unittest.TestCase):
             if obj["type"] == "lens":
                 self.assertNotIn("kibanaSavedObjectMeta", attributes)
 
+    def test_lens_objects_use_indexpattern_state_contract(self) -> None:
+        bundle = render_es_assets.build_kibana_saved_objects("agent-obsv")
+        lens_objects = [obj for obj in bundle["objects"] if obj["type"] == "lens"]
+        self.assertGreaterEqual(len(lens_objects), 4)
+        for obj in lens_objects:
+            state = obj["attributes"]["state"]
+            self.assertIn("datasourceStates", state)
+            self.assertIn("indexpattern", state["datasourceStates"])
+            self.assertIn("visualization", state)
+            self.assertIn("filters", state)
+            self.assertIn("query", state)
+            self.assertNotIn("formBased", state["datasourceStates"])
+            references = {ref["name"] for ref in obj["references"]}
+            self.assertIn("indexpattern-datasource-current-indexpattern", references)
+            self.assertIn("indexpattern-datasource-layer-layer1", references)
+
     def test_report_config_uses_data_stream_and_timestamp(self) -> None:
         report_config = render_es_assets.build_report_config("agent-obsv", DISCOVERY_SAMPLE)
         self.assertEqual(report_config["time_field"], "@timestamp")
@@ -170,14 +231,36 @@ class ContractsAndSecurityTests(unittest.TestCase):
             auth_mode="env",
             index_prefix="agent-obsv",
             ingest_mode="collector",
+            bridge_bind_host="127.0.0.1",
+            bridge_http_port=14319,
             dry_run=True,
         )
         self.assertTrue(any("--max-files" in note for note in notes))
         self.assertTrue(any("credentials were not written to disk" in note for note in notes))
+        self.assertTrue(any("restart the Collector process" in note for note in notes))
         self.assertTrue(any("agent-obsv-events" in note for note in notes))
         self.assertTrue(any("Selected ingest mode" in note for note in notes))
         self.assertTrue(any("otelcol-contrib" in note for note in notes))
+        self.assertTrue(any("--telemetry-metrics-port" in note for note in notes))
+        self.assertTrue(any("logs_index" in note and "traces_index" in note and "metrics_index" in note for note in notes))
+        self.assertTrue(any("agent-obsv-events" in note and "agent-obsv-metrics" in note for note in notes))
+        self.assertTrue(any("mapping.allowed_modes" in note for note in notes))
+        self.assertTrue(any("Collector → Elasticsearch exporter" in note for note in notes))
+        self.assertTrue(any("http://127.0.0.1:14319" in note and "logs` and `traces" in note for note in notes))
+        self.assertTrue(any("metrics on the Collector path" in note for note in notes))
         self.assertTrue(any("Dry-run mode" in note for note in notes))
+
+    def test_collect_summary_notes_clarify_sanity_check_scope(self) -> None:
+        notes = bootstrap_observability.collect_summary_notes(
+            {"files_scanned": 10, "detected_modules": [{"module_kind": "runtime_entrypoint"}], "recommended_ingest_modes": []},
+            max_files=400,
+            auth_mode="none",
+            index_prefix="agent-obsv",
+            ingest_mode="collector",
+            bridge_bind_host="127.0.0.1",
+            bridge_http_port=14319,
+        )
+        self.assertFalse(any("sanity check" in note for note in notes))
 
     def test_search_payload_uses_ecs_fields_by_default(self) -> None:
         payload = generate_report.search_payload("now-24h")
@@ -187,7 +270,7 @@ class ContractsAndSecurityTests(unittest.TestCase):
     def test_search_payload_uses_custom_time_field(self) -> None:
         payload = generate_report.search_payload("now-24h", time_field="event.ingested")
         self.assertIn("event.ingested", payload["query"]["range"])
-        self.assertNotIn("captured_at", payload["query"]["range"])
+        self.assertNotIn("@timestamp", payload["query"]["range"])
 
     def test_iter_text_files_ignores_generated_reference_and_test_dirs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

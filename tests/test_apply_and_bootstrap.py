@@ -12,6 +12,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import apply_elasticsearch_assets  # noqa: E402
 import bootstrap_observability  # noqa: E402
+import render_otlp_http_bridge  # noqa: E402
 from common import ESConfig  # noqa: E402
 
 
@@ -87,6 +88,30 @@ class ApplyAndBootstrapTests(unittest.TestCase):
         self.assertTrue(any(path.startswith("/api/saved_objects/index-pattern/agent-obsv-events-view") for _, path, _ in kibana_calls))
         self.assertTrue(any(path.startswith("/api/saved_objects/search/agent-obsv-event-stream") for _, path, _ in kibana_calls))
 
+    def test_apply_assets_does_not_fall_back_to_legacy_write_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            assets_dir = Path(tmp_dir)
+            (assets_dir / "index-template.json").write_text('{"index_patterns": ["agent-obsv-events*"], "data_stream": {}}', encoding="utf-8")
+            (assets_dir / "ingest-pipeline.json").write_text('{"processors": []}', encoding="utf-8")
+            (assets_dir / "ilm-policy.json").write_text('{"policy": {"phases": {}}}', encoding="utf-8")
+            (assets_dir / "report-config.json").write_text('{"events_alias": "agent-obsv-events", "data_stream": "agent-obsv-events"}', encoding="utf-8")
+            (assets_dir / "kibana-saved-objects.json").write_text('{"objects": []}', encoding="utf-8")
+
+            def fake_es_request(config, method, path, payload=None):
+                if path == "/_data_stream/agent-obsv-events":
+                    raise apply_elasticsearch_assets.SkillError("data stream bootstrap failed")
+                return {"acknowledged": True}
+
+            with mock.patch.object(apply_elasticsearch_assets, "es_request", side_effect=fake_es_request):
+                with self.assertRaises(apply_elasticsearch_assets.SkillError):
+                    apply_elasticsearch_assets.apply_assets(
+                        ESConfig(es_url="http://localhost:9200"),
+                        assets_dir=assets_dir,
+                        index_prefix="agent-obsv",
+                        bootstrap_index=True,
+                        apply_kibana=False,
+                    )
+
     def test_build_runtime_env_and_launcher_include_otlp_details(self) -> None:
         env_text = bootstrap_observability.build_runtime_env(
             service_name="agent-runtime",
@@ -100,8 +125,80 @@ class ApplyAndBootstrapTests(unittest.TestCase):
         )
         self.assertIn("OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317", env_text)
         self.assertIn("OTEL_SERVICE_NAME=agent-runtime", env_text)
+        self.assertNotIn("ELASTICSEARCH_USERNAME=", env_text)
         self.assertIn('source "$SCRIPT_DIR/agent-otel.env"', launcher)
         self.assertIn('--config "$SCRIPT_DIR/otel-collector.generated.yaml"', launcher)
+
+    def test_build_runtime_env_can_include_es_placeholders(self) -> None:
+        env_text = bootstrap_observability.build_runtime_env(
+            service_name="agent-runtime",
+            environment="dev",
+            otlp_endpoint="http://127.0.0.1:4317",
+            include_es_placeholders=True,
+        )
+        self.assertIn("ELASTICSEARCH_USERNAME=", env_text)
+        self.assertIn("ELASTICSEARCH_PASSWORD=", env_text)
+        self.assertIn("avoid storing real secrets in this file", env_text)
+
+    def test_build_bridge_runtime_env_and_launcher_include_http_details(self) -> None:
+        env_text = bootstrap_observability.build_bridge_runtime_env(
+            service_name="agent-runtime",
+            environment="dev",
+            bridge_endpoint="http://127.0.0.1:14319",
+        )
+        launcher = bootstrap_observability.build_bridge_run_script(
+            bridge_path=Path("/tmp/otlphttpbridge.py"),
+            env_path=Path("/tmp/agent-otel-bridge.env"),
+        )
+        self.assertIn("OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf", env_text)
+        self.assertIn("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:14319/v1/traces", env_text)
+        self.assertIn("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:14319/v1/logs", env_text)
+        self.assertIn("Metrics are not bridged", env_text)
+        self.assertIn('source "$SCRIPT_DIR/agent-otel-bridge.env"', launcher)
+        self.assertIn('exec python3 "$SCRIPT_DIR/otlphttpbridge.py"', launcher)
+
+    def test_render_bridge_script_binds_expected_endpoint(self) -> None:
+        script = render_otlp_http_bridge.render_bridge_script(
+            es_url="http://localhost:9200",
+            index_prefix="agent-obsv",
+            bind_host="127.0.0.1",
+            bind_port=14319,
+            verify_tls=True,
+        )
+        self.assertIn("EVENTS_DATA_STREAM = 'agent-obsv-events'", script)
+        self.assertIn('BRIDGE_PORT = 14319', script)
+        self.assertIn('OTLP protobuf payloads require', script)
+        compile(script, "rendered-bridge", "exec")
+
+    def test_summary_includes_sanity_check_scope_note_after_apply(self) -> None:
+        summary = bootstrap_observability.build_summary(
+            discovery_path=Path("/tmp/discovery.json"),
+            assets_paths={
+                "index_template": "/tmp/index-template.json",
+                "ingest_pipeline": "/tmp/ingest-pipeline.json",
+                "ilm_policy": "/tmp/ilm-policy.json",
+                "report_config": "/tmp/report-config.json",
+                "kibana_saved_objects_json": "/tmp/kibana-saved-objects.json",
+                "kibana_saved_objects_ndjson": "/tmp/kibana-saved-objects.ndjson",
+            },
+            notes=["The built-in sanity check writes directly to Elasticsearch; treat it as Elastic-side validation, not as Collector end-to-end proof."],
+            ingest_mode="collector",
+            collector_path=None,
+            env_path=None,
+            collector_run_path=None,
+            bridge_path=Path("/tmp/otlphttpbridge.py"),
+            bridge_env_path=Path("/tmp/agent-otel-bridge.env"),
+            bridge_run_path=Path("/tmp/run-otlphttpbridge.sh"),
+            instrument_snippet_path=None,
+            native_assets_paths=None,
+            apply_summary_path=Path("/tmp/apply-summary.json"),
+            sanity_check_path=Path("/tmp/sanity-check.json"),
+            report_output=None,
+        )
+        self.assertIn("Collector end-to-end proof", summary)
+        self.assertIn("sanity check", summary)
+        self.assertIn("OTLP HTTP bridge", summary)
+        self.assertIn("run-otlphttpbridge.sh", summary)
 
     def test_apply_assets_dry_run_returns_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

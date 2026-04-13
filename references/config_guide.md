@@ -20,6 +20,7 @@ The normal bootstrap path should leave:
 - ILM policy
 - report config
 - Kibana saved objects bundle
+- Elastic-native APM / RUM / profiling starter bundle when using `elastic-agent-fleet` or `apm-otlp-hybrid`
 - optional Python instrumentation starter file
 - optional apply summary
 - optional sanity-check result
@@ -78,6 +79,46 @@ Minimum rules:
 - keep the binary outside `generated/`, for example under `tools/otelcol/<version>/`
 - keep runtime logs and PID files under `generated/bootstrap/runtime/`
 - do not modify global shell profiles or system paths just to satisfy this skill
+- if you run a second Collector for diagnosis, rerender with a different `--telemetry-metrics-port`; the default self-telemetry listener is `127.0.0.1:8888`
+
+## Exporter Triage Rule
+
+If a debug Collector confirms `/v1/logs` and `/v1/traces` are received and the debug exporter prints the payload, treat the remaining issue as **Collector → Elasticsearch exporter** until proven otherwise.
+
+For the generated bundle in this repo:
+
+- `logs_index` and `traces_index` statically target `<index-prefix>-events`
+- `metrics_index` statically targets `<index-prefix>-metrics`
+- scope attributes force `elastic.mapping.mode=ecs`
+- exporter config restricts `mapping.allowed_modes` to `ecs`
+
+That means the first file to inspect is `otel-collector.generated.yaml`, specifically the `exporters.elasticsearch/*` blocks.
+
+## Elastic-native Surface Rule
+
+When bootstrap renders the `elastic-native/` bundle, treat it as the operator-facing starter for Kibana APM / Traces / User Experience / profiling surfaces:
+
+- `apm-agent.env` is the runtime env template for Elastic APM / trace analysis
+- `surface-manifest.json` is the machine-readable map of Kibana native apps and correlation contract
+- `apm-entrypoints.md` and `trace-analysis-playbook.md` point operators at the right Kibana apps and trace workflow
+- `rum-config.json`, `rum-agent-snippet.js`, and `ux-observability-playbook.md` cover browser-side UX monitoring and frontend/backend trace correlation
+- `profiling-starter.md` is a rollout checklist for Elastic Universal Profiling, not an installer
+
+These files extend the base dashboard surface; they do not magically make APM, RUM, or profiling live without runtime / host rollout work.
+
+## Bridge Fallback Rule
+
+The generated bootstrap bundle also includes a local OTLP HTTP bridge fallback for the narrowed failure mode above.
+
+Current contract:
+
+- `otlphttpbridge.py` listens on `127.0.0.1:14319` by default
+- it accepts `POST /v1/logs` and `POST /v1/traces`
+- it writes directly to `<index-prefix>-events`
+- it is **not** the metrics path; keep metrics on the Collector route
+- OTLP JSON works out of the box; OTLP protobuf requires runtime access to `protobuf` and `opentelemetry-proto`
+
+Use this path when you need stable Elasticsearch ingest first and can finish Collector exporter compatibility later.
 
 ## Startup / Stop Rule
 
@@ -130,7 +171,7 @@ Current default is:
 - `time_field = @timestamp`
 
 The ingest pipeline stamps `@timestamp` from ingest time when upstream telemetry does not provide it.
-`captured_at` is kept as an alias to `@timestamp` for backward compatibility.
+`@timestamp` is the only default reporting field in the 9.x contract.
 That keeps Kibana and the smoke report on the same time-field contract.
 
 ## Report Contract Rule

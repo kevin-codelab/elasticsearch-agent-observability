@@ -6,9 +6,9 @@ The primary human-facing surface is **Kibana**.
 
 In the current version, that specifically means:
 
-- a data view / index pattern
+- a data view
 - a saved search entry surface
-- an asset bundle that can be applied or imported
+- an asset bundle that can be applied through the API or imported via `kibana-saved-objects.ndjson`
 
 That is a usable Kibana starting point.
 It is not yet a full dashboard suite.
@@ -48,8 +48,6 @@ Do not claim retry breakdown or timeout breakdown unless the implementation actu
 Current default:
 
 - `@timestamp`
-
-`captured_at` is kept as an alias for backward compatibility.
 
 Both the smoke report query and the Kibana entry surface should follow the same time-field contract.
 

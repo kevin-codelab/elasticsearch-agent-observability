@@ -14,7 +14,7 @@ When latency climbs, token cost drifts, or failures appear, teams usually still 
 - whether the live cluster still matches the generated configuration
 
 This skill builds that baseline.
-It turns a workspace into a ready observability starter for Elasticsearch and Kibana: OpenTelemetry Collector configuration, Elasticsearch assets, Kibana dashboards, alert diagnosis, and drift validation.
+It turns a workspace into a ready observability starter for Elasticsearch and Kibana: OpenTelemetry Collector configuration, Elasticsearch assets, Kibana dashboards, Elastic-native APM / RUM / profiling starter assets, alert diagnosis, and drift validation.
 
 ## Advantages
 
@@ -26,10 +26,11 @@ It turns a workspace into a ready observability starter for Elasticsearch and Ki
 
 ## What the skill generates
 
-- **Workspace discovery**: detect runtime modules, model adapters, tool registries, and MCP surfaces
+- **Workspace discovery**: detect runtime modules, model adapters, tool registries, MCP surfaces, web services, browser frontends, knowledge bases, and guardrails
 - **Collection layer**: OpenTelemetry Collector configuration, environment files, and launch scripts
-- **Elasticsearch assets**: data streams, component templates, index templates, ingest pipelines, and lifecycle policies
+- **Elasticsearch assets**: data streams, component templates (with component-type / guardrail / evaluation / memory fields), index templates, ingest pipelines, and lifecycle policies
 - **Kibana assets**: data views, saved searches, Lens visualizations, and an overview dashboard
+- **Elastic-native starter bundle**: APM env + entrypoint guide, surface manifest, trace-analysis playbook, browser RUM config/snippet, UX playbook, and profiling rollout checklist
 - **Diagnosis flow**: alert checks for error-rate spikes, latency regressions, and token anomalies with RCA output
 - **Drift validation**: compare the live Elasticsearch cluster with locally generated assets
 - **Knowledge archival**: write RCA results into `elasticsearch-insight-store`
@@ -104,7 +105,7 @@ python scripts/alert_and_diagnose.py \
 ```bash
 python scripts/validate_state.py \
   --es-url <elasticsearch-url> \
-  --generated-dir <generated-dir>
+  --assets-dir <assets-dir>
 ```
 
 ## Generated output
@@ -115,14 +116,29 @@ generated/bootstrap/
 ├── otel-collector.generated.yaml
 ├── run-collector.sh
 ├── agent-otel.env
+├── otlphttpbridge.py
+├── run-otlphttpbridge.sh
+├── agent-otel-bridge.env
 ├── agent_otel_bootstrap.py
 ├── elastic-native/
+│   ├── elastic-agent-policy.json
+│   ├── elastic-agent.env
+│   ├── run-elastic-agent.sh
+│   ├── apm-agent.env
+│   ├── apm-entrypoints.md
+│   ├── surface-manifest.json
+│   ├── trace-analysis-playbook.md
+│   ├── rum-config.json
+│   ├── rum-agent-snippet.js
+│   ├── ux-observability-playbook.md
+│   └── profiling-starter.md
 ├── elasticsearch/
 │   ├── component-template-*.json
 │   ├── index-template.json
 │   ├── ingest-pipeline.json
 │   ├── ilm-policy.json
 │   ├── kibana-saved-objects.json
+│   ├── kibana-saved-objects.ndjson
 │   └── apply-summary.json
 └── bootstrap-summary.md
 ```
@@ -134,15 +150,16 @@ Use one of these paths:
 
 - **Preferred**: use an already installed `otelcol-contrib`
 - **Safe local fallback**: download a pinned official `otelcol-contrib` release into a workspace-local tools directory and point `OTELCOL_BIN` at it
+- **Parallel debug Collector**: if you need a second collector for OTLP-vs-exporter isolation, rerender with a different `--telemetry-metrics-port`; Collector self-telemetry binds `127.0.0.1:8888` by default
 - **Do not claim the Collector is running** if neither of those is true; switch to another ingest mode instead of pretending the collection layer is live
 
 A safe workspace-local launch looks like this:
 
 ```bash
-mkdir -p tools/otelcol/0.102.1 generated/bootstrap/runtime
-curl -L -o tools/otelcol/0.102.1/otelcol-contrib.tar.gz <official-release-url>
-tar -xzf tools/otelcol/0.102.1/otelcol-contrib.tar.gz -C tools/otelcol/0.102.1
-OTELCOL_BIN="$PWD/tools/otelcol/0.102.1/otelcol-contrib" \
+mkdir -p tools/otelcol/<version> generated/bootstrap/runtime
+curl -L -o tools/otelcol/<version>/otelcol-contrib.tar.gz <official-release-url>
+tar -xzf tools/otelcol/<version>/otelcol-contrib.tar.gz -C tools/otelcol/<version>
+OTELCOL_BIN="$PWD/tools/otelcol/<version>/otelcol-contrib" \
   nohup generated/bootstrap/run-collector.sh \
   > generated/bootstrap/runtime/collector.log 2>&1 &
 echo $! > generated/bootstrap/runtime/collector.pid
@@ -156,18 +173,58 @@ Operational minimums:
 - **Stop cleanly**: `kill "$(cat generated/bootstrap/runtime/collector.pid)"`
 - **Rollback cleanly**: remove the local binary path from `OTELCOL_BIN`, stop the process, and keep the generated config bundle for audit
 
+## OTLP HTTP bridge fallback
+
+When OTLP receive is healthy but the Collector Elasticsearch exporter is still incompatible, the generated bundle also includes a **logs/traces-only** bridge fallback:
+
+- `otlphttpbridge.py`: local OTLP HTTP bridge that writes directly to `agent-obsv-events`
+- `run-otlphttpbridge.sh`: launcher for the bridge process
+- `agent-otel-bridge.env`: env template that points OTLP HTTP logs/traces at `http://127.0.0.1:14319`
+
+This path is intentionally conservative:
+
+- **Logs + traces only**: metrics stay on the Collector path
+- **Fallback, not replacement**: prefer the native Collector → Elasticsearch path when it works
+- **Local-first**: the default bind is `127.0.0.1:14319`, so it does not compete with the usual `4317` / `4318` Collector receiver ports
+
+Minimal launch shape:
+
+```bash
+mkdir -p generated/bootstrap/runtime
+nohup generated/bootstrap/run-otlphttpbridge.sh \
+  > generated/bootstrap/runtime/otlphttpbridge.log 2>&1 &
+echo $! > generated/bootstrap/runtime/otlphttpbridge.pid
+```
+
+Stop shape:
+
+```bash
+kill "$(cat generated/bootstrap/runtime/otlphttpbridge.pid)"
+```
+
+## Elastic-native APM / UX / profiling starter
+
+When the operator chooses `elastic-agent-fleet` or `apm-otlp-hybrid`, the generated `elastic-native/` bundle is no longer just a thin policy stub:
+
+- **APM / tracing**: `apm-agent.env` and `apm-entrypoints.md` point you at Kibana `Services`, `Traces`, and `Service Map`
+- **User experience monitoring**: `rum-agent-snippet.js` gives a direct starter for `@elastic/apm-rum`
+- **Performance profiling**: `profiling-starter.md` documents the rollout contract for Elastic Universal Profiling so host-level performance analysis is part of the plan
+
+This still stays honest: the repo generates the starter assets and operating contract, but it does not auto-enroll Fleet, auto-patch frontend entrypoints, or auto-install the profiling agent for you.
+
 ## Requirements
 
 - Python 3.10+
 - Elasticsearch 9.x
-- Kibana
+- Kibana 9.x
 - `otelcol-contrib` with `spanmetrics` and the Elasticsearch exporter
 - Basic license is enough
 
 ## Dependencies
 
 - **Repository scripts**: Python standard library only
-- **Generated instrumentation snippet**: install `opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-grpc` in the target agent project
+- **Generated instrumentation snippet** (Python only): install `opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-grpc` in the target agent project. Go / Java / TypeScript agents should wire the OTel SDK directly; the generated Collector config and ES assets still work for any OTLP-capable runtime.
+- **OTLP HTTP bridge protobuf path**: install `protobuf` and `opentelemetry-proto` only if the sender will post OTLP HTTP protobuf payloads to the generated bridge; OTLP JSON does not need extra packages
 - **Optional auto-patching path**: if the target project wants auto-instrumented OpenAI or Anthropic calls, those SDKs must already exist in the target project
 
 ## Development

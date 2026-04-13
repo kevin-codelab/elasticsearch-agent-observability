@@ -1,37 +1,20 @@
 [
   {
-    "_comment": "Legacy fields — should be renamed to ECS by ingest pipeline",
+    "_comment": "ECS-native tool event — baseline 9.x ingest contract",
     "input": {
-      "agent_id": "agent-001",
-      "run_id": "run-abc",
-      "turn_id": "turn-1",
-      "span_id": "span-xyz",
-      "parent_span_id": "parent-xyz",
-      "session_id": "sess-42",
-      "tool_name": "web_search",
-      "model_name": "gpt-4",
-      "mcp_method_name": "tools/call",
-      "error_type": "timeout",
-      "latency_ms": 350.5,
-      "retry_count": 2,
-      "signal_type": "tool_call",
-      "semantic_kind": "retrieval",
-      "token_input": 1200,
-      "token_output": 800,
-      "cost": 0.05,
-      "message": "legacy event from old SDK"
-    },
-    "expected_after_pipeline": {
+      "@timestamp": "2026-04-01T12:00:00Z",
+      "event.action": "tool_call",
+      "event.outcome": "success",
+      "service.name": "agent-runtime",
       "agent.id": "agent-001",
+      "trace.id": "trace-abc",
+      "span.id": "span-xyz",
       "gen_ai.agent.run_id": "run-abc",
       "gen_ai.agent.turn_id": "turn-1",
-      "span.id": "span-xyz",
-      "parent.id": "parent-xyz",
       "gen_ai.agent.session_id": "sess-42",
       "gen_ai.agent.tool_name": "web_search",
-      "gen_ai.agent.model_name": "gpt-4",
+      "gen_ai.agent.model_name": "gpt-5",
       "gen_ai.agent.mcp_method_name": "tools/call",
-      "gen_ai.agent.error_type": "timeout",
       "gen_ai.agent.latency_ms": 350.5,
       "gen_ai.agent.retry_count": 2,
       "gen_ai.agent.signal_type": "tool_call",
@@ -39,14 +22,31 @@
       "gen_ai.usage.input_tokens": 1200,
       "gen_ai.usage.output_tokens": 800,
       "gen_ai.agent.cost": 0.05,
-      "event.outcome": "failure",
+      "message": "ecs-native event"
+    },
+    "expected_after_pipeline": {
+      "agent.id": "agent-001",
+      "gen_ai.agent.run_id": "run-abc",
+      "gen_ai.agent.turn_id": "turn-1",
+      "gen_ai.agent.session_id": "sess-42",
+      "gen_ai.agent.tool_name": "web_search",
+      "gen_ai.agent.model_name": "gpt-5",
+      "gen_ai.agent.mcp_method_name": "tools/call",
+      "gen_ai.agent.latency_ms": 350.5,
+      "gen_ai.agent.retry_count": 2,
+      "gen_ai.agent.signal_type": "tool_call",
+      "gen_ai.agent.semantic_kind": "retrieval",
+      "gen_ai.usage.input_tokens": 1200,
+      "gen_ai.usage.output_tokens": 800,
+      "gen_ai.agent.cost": 0.05,
+      "event.outcome": "success",
       "observer.product": "elasticsearch-agent-observability"
     }
   },
   {
-    "_comment": "ECS-native event — fields should pass through unchanged",
+    "_comment": "ECS-native event from the runtime — fields should pass through unchanged",
     "input": {
-      "@timestamp": "2026-04-01T12:00:00Z",
+      "@timestamp": "2026-04-01T12:05:00Z",
       "event.action": "model_call",
       "event.outcome": "success",
       "service.name": "my-agent",
@@ -69,14 +69,13 @@
     }
   },
   {
-    "_comment": "JSON body in message — should be parsed and merged",
+    "_comment": "JSON body in message — parsed content should already follow ECS naming",
     "input": {
-      "message": "{\"tool_name\": \"file_read\", \"latency_ms\": 42.0, \"custom_field\": \"hello\"}"
+      "message": "{\"event\": {\"action\": \"tool_call\"}, \"gen_ai\": {\"agent\": {\"tool_name\": \"file_read\", \"latency_ms\": 42.0}}, \"service\": {\"name\": \"message-agent\"}}"
     },
     "expected_after_pipeline": {
       "gen_ai.agent.tool_name": "file_read",
       "gen_ai.agent.latency_ms": 42.0,
-      "event.outcome": "success",
       "observer.product": "elasticsearch-agent-observability"
     }
   },
@@ -87,7 +86,7 @@
       "gen_ai.completion": "The password is hunter2",
       "gen_ai.tool.call.arguments": "{\"query\": \"password\"}",
       "gen_ai.tool.call.result": "{\"result\": \"hunter2\"}",
-      "tool_name": "secret_tool",
+      "gen_ai.agent.tool_name": "secret_tool",
       "message": "sensitive payload event"
     },
     "expected_after_pipeline": {
@@ -100,19 +99,5 @@
       "gen_ai.tool.call.arguments",
       "gen_ai.tool.call.result"
     ]
-  },
-  {
-    "_comment": "Latency_ms to event.duration conversion",
-    "input": {
-      "latency_ms": 500.0,
-      "tool_name": "slow_tool",
-      "message": "latency conversion test"
-    },
-    "expected_after_pipeline": {
-      "gen_ai.agent.latency_ms": 500.0,
-      "gen_ai.agent.tool_name": "slow_tool",
-      "event.outcome": "success",
-      "observer.product": "elasticsearch-agent-observability"
-    }
   }
 ]

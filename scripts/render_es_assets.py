@@ -106,8 +106,24 @@ def _ecs_base_properties() -> dict[str, Any]:
         "gen_ai.agent.retry_count": {"type": "integer"},
         "gen_ai.agent.latency_ms": {"type": "float"},
         "gen_ai.agent.cost": {"type": "double"},
-        # --- backward compat aliases (old field → new) ---
-        "captured_at": {"type": "alias", "path": "@timestamp"},
+        # --- component-level observability (aligns with AgentKit component monitoring) ---
+        "gen_ai.agent.component_type": {"type": "keyword"},  # runtime / tool / llm / mcp / memory / knowledge / guardrail
+        # --- memory / knowledge monitoring ---
+        "gen_ai.agent.retrieval_latency_ms": {"type": "float"},
+        "gen_ai.agent.cache_hit": {"type": "boolean"},
+        "gen_ai.agent.retrieval_score": {"type": "float"},
+        "gen_ai.agent.knowledge_source": {"type": "keyword"},
+        # --- guardrail / safety monitoring ---
+        "gen_ai.guardrail.action": {"type": "keyword"},  # pass / block / redact
+        "gen_ai.guardrail.rule_id": {"type": "keyword"},
+        "gen_ai.guardrail.category": {"type": "keyword"},  # content_safety / prompt_injection / pii / custom
+        "gen_ai.guardrail.latency_ms": {"type": "float"},
+        # --- evaluation observability ---
+        "gen_ai.evaluation.run_id": {"type": "keyword"},
+        "gen_ai.evaluation.evaluator": {"type": "keyword"},
+        "gen_ai.evaluation.score": {"type": "float"},
+        "gen_ai.evaluation.outcome": {"type": "keyword"},  # pass / fail / degraded
+        "gen_ai.evaluation.dimension": {"type": "keyword"},  # quality / safety / latency / cost
     }
 
 
@@ -180,25 +196,7 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
             # --- ECS event defaults ---
             {"set": {"field": "event.kind", "value": "event", "override": False}},
             {"set": {"field": "event.category", "value": "process", "override": False}},
-            # --- backward compat: copy legacy fields to ECS ---
-            {"rename": {"field": "agent_id", "target_field": "agent.id", "ignore_missing": True}},
-            {"rename": {"field": "run_id", "target_field": "gen_ai.agent.run_id", "ignore_missing": True}},
-            {"rename": {"field": "turn_id", "target_field": "gen_ai.agent.turn_id", "ignore_missing": True}},
-            {"rename": {"field": "span_id", "target_field": "span.id", "ignore_missing": True}},
-            {"rename": {"field": "parent_span_id", "target_field": "parent.id", "ignore_missing": True}},
-            {"rename": {"field": "session_id", "target_field": "gen_ai.agent.session_id", "ignore_missing": True}},
-            {"rename": {"field": "tool_name", "target_field": "gen_ai.agent.tool_name", "ignore_missing": True}},
-            {"rename": {"field": "model_name", "target_field": "gen_ai.agent.model_name", "ignore_missing": True}},
-            {"rename": {"field": "mcp_method_name", "target_field": "gen_ai.agent.mcp_method_name", "ignore_missing": True}},
-            {"rename": {"field": "error_type", "target_field": "gen_ai.agent.error_type", "ignore_missing": True}},
-            {"rename": {"field": "latency_ms", "target_field": "gen_ai.agent.latency_ms", "ignore_missing": True}},
-            {"rename": {"field": "retry_count", "target_field": "gen_ai.agent.retry_count", "ignore_missing": True}},
-            {"rename": {"field": "signal_type", "target_field": "gen_ai.agent.signal_type", "ignore_missing": True}},
-            {"rename": {"field": "semantic_kind", "target_field": "gen_ai.agent.semantic_kind", "ignore_missing": True}},
-            {"rename": {"field": "token_input", "target_field": "gen_ai.usage.input_tokens", "ignore_missing": True}},
-            {"rename": {"field": "token_output", "target_field": "gen_ai.usage.output_tokens", "ignore_missing": True}},
-            {"rename": {"field": "cost", "target_field": "gen_ai.agent.cost", "ignore_missing": True}},
-            # --- compute event.duration from latency_ms if present ---
+            # --- compute event.duration from ECS-native latency_ms if present ---
             {
                 "script": {
                     "lang": "painless",
@@ -314,6 +312,40 @@ def build_search_saved_object(*, object_id: str, title: str, description: str, d
     }
 
 
+DEFAULT_LENS_LAYER_ID = "layer1"
+
+
+def _lens_current_reference_name() -> str:
+    return "indexpattern-datasource-current-indexpattern"
+
+
+def _lens_layer_reference_name(layer_id: str = DEFAULT_LENS_LAYER_ID) -> str:
+    return f"indexpattern-datasource-layer-{layer_id}"
+
+
+def _build_lens_state(*, columns: dict[str, Any], column_order: list[str], visualization: dict[str, Any], layer_id: str = DEFAULT_LENS_LAYER_ID) -> dict[str, Any]:
+    return {
+        "adHocDataViews": {},
+        "datasourceStates": {
+            "indexpattern": {
+                "currentIndexPatternId": _lens_current_reference_name(),
+                "layers": {
+                    layer_id: {
+                        "columns": columns,
+                        "columnOrder": column_order,
+                        "incompleteColumns": {},
+                        "indexPatternId": _lens_layer_reference_name(layer_id),
+                    }
+                },
+            }
+        },
+        "filters": [],
+        "internalReferences": [],
+        "query": {"language": "kuery", "query": ""},
+        "visualization": visualization,
+    }
+
+
 def build_lens_saved_object(*, object_id: str, title: str, description: str, visualization_type: str, state: dict[str, Any], data_view_id: str) -> dict[str, Any]:
     return {
         "type": "lens",
@@ -324,26 +356,28 @@ def build_lens_saved_object(*, object_id: str, title: str, description: str, vis
             "visualizationType": visualization_type,
             "state": state,
         },
-        "references": [{"id": data_view_id, "type": "index-pattern", "name": "indexpattern-datasource-layer-layer1"}],
+        "references": [
+            {"id": data_view_id, "type": "index-pattern", "name": _lens_current_reference_name()},
+            {"id": data_view_id, "type": "index-pattern", "name": _lens_layer_reference_name()},
+        ],
     }
 
 
 def _build_lens_event_rate_visualization(*, object_id: str, data_view_id: str) -> dict[str, Any]:
     """Lens XY chart: event count over time, broken down by event.outcome."""
-    state = {
-        "visualization": {
-            "title": "Agent event rate",
-            "visualizationType": "lnsXY",
-            "state": {
-                "datasourceStates": {"formBased": {"layers": {"layer1": {"columns": {
-                    "col-x": {"operationType": "date_histogram", "sourceField": "@timestamp", "params": {"interval": "auto"}},
-                    "col-y": {"operationType": "count", "label": "Events"},
-                    "col-breakdown": {"operationType": "terms", "sourceField": "event.outcome", "params": {"size": 5}},
-                }, "columnOrder": ["col-x", "col-breakdown", "col-y"]}}}},
-                "visualization": {"preferredSeriesType": "bar_stacked", "layers": [{"layerId": "layer1", "xAccessor": "col-x", "accessors": ["col-y"], "splitAccessor": "col-breakdown"}]},
-            },
+    state = _build_lens_state(
+        columns={
+            "col-x": {"operationType": "date_histogram", "sourceField": "@timestamp", "params": {"interval": "auto"}},
+            "col-y": {"operationType": "count", "label": "Events"},
+            "col-breakdown": {"operationType": "terms", "sourceField": "event.outcome", "params": {"size": 5}},
         },
-    }
+        column_order=["col-x", "col-breakdown", "col-y"],
+        visualization={
+            "legend": {"isVisible": True, "position": "right"},
+            "preferredSeriesType": "bar_stacked",
+            "layers": [{"layerId": DEFAULT_LENS_LAYER_ID, "xAccessor": "col-x", "accessors": ["col-y"], "splitAccessor": "col-breakdown"}],
+        },
+    )
     return build_lens_saved_object(
         object_id=object_id,
         title="Agent event rate",
@@ -355,25 +389,25 @@ def _build_lens_event_rate_visualization(*, object_id: str, data_view_id: str) -
 
 
 def _build_lens_latency_percentiles(*, object_id: str, data_view_id: str) -> dict[str, Any]:
-    """Lens metric: P50 and P95 latency."""
-    state = {
-        "visualization": {
-            "title": "Agent latency P50 / P95",
-            "visualizationType": "lnsMetric",
-            "state": {
-                "datasourceStates": {"formBased": {"layers": {"layer1": {"columns": {
-                    "col-p50": {"operationType": "percentile", "sourceField": "event.duration", "params": {"percentile": 50}, "label": "P50 ns"},
-                    "col-p95": {"operationType": "percentile", "sourceField": "event.duration", "params": {"percentile": 95}, "label": "P95 ns"},
-                }, "columnOrder": ["col-p50", "col-p95"]}}}},
-                "visualization": {"layerId": "layer1", "accessor": "col-p50"},
-            },
+    """Lens XY chart: P50 and P95 latency over time."""
+    state = _build_lens_state(
+        columns={
+            "col-x": {"operationType": "date_histogram", "sourceField": "@timestamp", "params": {"interval": "auto"}},
+            "col-p50": {"operationType": "percentile", "sourceField": "event.duration", "params": {"percentile": 50}, "label": "P50 duration (ns)"},
+            "col-p95": {"operationType": "percentile", "sourceField": "event.duration", "params": {"percentile": 95}, "label": "P95 duration (ns)"},
         },
-    }
+        column_order=["col-x", "col-p50", "col-p95"],
+        visualization={
+            "legend": {"isVisible": True, "position": "right"},
+            "preferredSeriesType": "line",
+            "layers": [{"layerId": DEFAULT_LENS_LAYER_ID, "xAccessor": "col-x", "accessors": ["col-p50", "col-p95"]}],
+        },
+    )
     return build_lens_saved_object(
         object_id=object_id,
-        title="Agent latency P50 / P95",
-        description="P50 and P95 event.duration.",
-        visualization_type="lnsMetric",
+        title="Agent latency over time (P50 / P95)",
+        description="P50 and P95 event.duration over time.",
+        visualization_type="lnsXY",
         state=state,
         data_view_id=data_view_id,
     )
@@ -381,19 +415,17 @@ def _build_lens_latency_percentiles(*, object_id: str, data_view_id: str) -> dic
 
 def _build_lens_top_tools(*, object_id: str, data_view_id: str) -> dict[str, Any]:
     """Lens pie: top tools by call count."""
-    state = {
-        "visualization": {
-            "title": "Top tools by call count",
-            "visualizationType": "lnsPie",
-            "state": {
-                "datasourceStates": {"formBased": {"layers": {"layer1": {"columns": {
-                    "col-slice": {"operationType": "terms", "sourceField": "gen_ai.agent.tool_name", "params": {"size": 10}},
-                    "col-metric": {"operationType": "count", "label": "Calls"},
-                }, "columnOrder": ["col-slice", "col-metric"]}}}},
-                "visualization": {"shape": "pie", "layers": [{"layerId": "layer1", "primaryGroups": ["col-slice"], "metric": "col-metric"}]},
-            },
+    state = _build_lens_state(
+        columns={
+            "col-slice": {"operationType": "terms", "sourceField": "gen_ai.agent.tool_name", "params": {"size": 10}},
+            "col-metric": {"operationType": "count", "label": "Calls"},
         },
-    }
+        column_order=["col-slice", "col-metric"],
+        visualization={
+            "shape": "pie",
+            "layers": [{"layerId": DEFAULT_LENS_LAYER_ID, "primaryGroups": ["col-slice"], "metric": "col-metric"}],
+        },
+    )
     return build_lens_saved_object(
         object_id=object_id,
         title="Top tools by call count",
@@ -406,20 +438,19 @@ def _build_lens_top_tools(*, object_id: str, data_view_id: str) -> dict[str, Any
 
 def _build_lens_token_usage(*, object_id: str, data_view_id: str) -> dict[str, Any]:
     """Lens XY: token usage over time (input vs output)."""
-    state = {
-        "visualization": {
-            "title": "Token usage over time",
-            "visualizationType": "lnsXY",
-            "state": {
-                "datasourceStates": {"formBased": {"layers": {"layer1": {"columns": {
-                    "col-x": {"operationType": "date_histogram", "sourceField": "@timestamp", "params": {"interval": "auto"}},
-                    "col-input": {"operationType": "sum", "sourceField": "gen_ai.usage.input_tokens", "label": "Input tokens"},
-                    "col-output": {"operationType": "sum", "sourceField": "gen_ai.usage.output_tokens", "label": "Output tokens"},
-                }, "columnOrder": ["col-x", "col-input", "col-output"]}}}},
-                "visualization": {"preferredSeriesType": "area_stacked", "layers": [{"layerId": "layer1", "xAccessor": "col-x", "accessors": ["col-input", "col-output"]}]},
-            },
+    state = _build_lens_state(
+        columns={
+            "col-x": {"operationType": "date_histogram", "sourceField": "@timestamp", "params": {"interval": "auto"}},
+            "col-input": {"operationType": "sum", "sourceField": "gen_ai.usage.input_tokens", "label": "Input tokens"},
+            "col-output": {"operationType": "sum", "sourceField": "gen_ai.usage.output_tokens", "label": "Output tokens"},
         },
-    }
+        column_order=["col-x", "col-input", "col-output"],
+        visualization={
+            "legend": {"isVisible": True, "position": "right"},
+            "preferredSeriesType": "area_stacked",
+            "layers": [{"layerId": DEFAULT_LENS_LAYER_ID, "xAccessor": "col-x", "accessors": ["col-input", "col-output"]}],
+        },
+    )
     return build_lens_saved_object(
         object_id=object_id,
         title="Token usage over time",
@@ -428,34 +459,6 @@ def _build_lens_token_usage(*, object_id: str, data_view_id: str) -> dict[str, A
         state=state,
         data_view_id=data_view_id,
     )
-
-
-def _build_alert_rule(*, object_id: str, data_view_id: str, index_prefix: str) -> dict[str, Any]:
-    """Kibana alert rule definition for error rate threshold."""
-    return {
-        "type": "alert",
-        "id": object_id,
-        "attributes": {
-            "name": f"Agent error rate threshold ({index_prefix})",
-            "alertTypeId": ".es-query",
-            "consumer": "alerts",
-            "enabled": False,
-            "schedule": {"interval": "5m"},
-            "params": {
-                "index": [f"{build_data_stream_name(index_prefix)}*"],
-                "timeField": "@timestamp",
-                "esQuery": json.dumps({"query": {"bool": {"filter": [{"exists": {"field": "gen_ai.agent.error_type"}}]}}}, separators=(",", ":")),
-                "thresholdComparator": ">",
-                "threshold": [10],
-                "timeWindowSize": 5,
-                "timeWindowUnit": "m",
-                "size": 100,
-            },
-            "actions": [],
-            "tags": ["agent-observability", index_prefix],
-        },
-        "references": [],
-    }
 
 
 def build_dashboard_saved_object(*, object_id: str, title: str, description: str, panel_refs: list[dict[str, str]]) -> dict[str, Any]:
@@ -584,16 +587,11 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
             title=title,
             description=ext.get("description", f"Custom panel for {source_field}"),
             visualization_type=viz_type,
-            state={
-                "visualization": {
-                    "title": title,
-                    "visualizationType": viz_type,
-                    "state": {
-                        "datasourceStates": {"formBased": {"layers": {"layer1": {"columns": columns, "columnOrder": list(columns.keys())}}}},
-                        "visualization": viz_config,
-                    },
-                },
-            },
+            state=_build_lens_state(
+                columns=columns,
+                column_order=list(columns.keys()),
+                visualization=viz_config,
+            ),
             data_view_id=data_view_id,
         )
         objects.append(lens_obj)

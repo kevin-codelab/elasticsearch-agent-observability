@@ -157,28 +157,9 @@ def ensure_data_stream(config: ESConfig, index_prefix: str) -> dict[str, str]:
     return {"data_stream": ds_name, "status": status}
 
 
-def ensure_write_index(config: ESConfig, index_prefix: str) -> dict[str, str]:
-    """Backward compat: create data stream, or fall back to legacy alias bootstrap."""
-    try:
-        return ensure_data_stream(config, index_prefix)
-    except SkillError:
-        events_alias = build_events_alias(index_prefix)
-        write_index = f"{events_alias}-000001"
-        create_payload = {"aliases": {events_alias: {"is_write_index": True}}}
-        status = "created"
-        try:
-            es_request(config, "PUT", f"/{write_index}", create_payload)
-        except SkillError as exc:
-            if RESOURCE_ALREADY_EXISTS not in str(exc):
-                raise
-            status = "already_exists"
-            es_request(
-                config,
-                "POST",
-                "/_aliases",
-                {"actions": [{"add": {"index": write_index, "alias": events_alias, "is_write_index": True}}]},
-            )
-        return {"events_alias": events_alias, "write_index": write_index, "status": status}
+def ensure_bootstrap_data_stream(config: ESConfig, index_prefix: str) -> dict[str, str]:
+    """Create the data stream required by the 9.x data-stream-first contract."""
+    return ensure_data_stream(config, index_prefix)
 
 
 def apply_kibana_saved_objects(config: ESConfig, *, kibana_url: str, kibana_space: str, bundle: dict[str, Any]) -> dict[str, Any]:
@@ -275,7 +256,7 @@ def apply_assets(
 
     bootstrap_summary = None
     if bootstrap_index:
-        bootstrap_summary = ensure_write_index(config, validated_prefix)
+        bootstrap_summary = ensure_bootstrap_data_stream(config, validated_prefix)
 
     kibana_summary = None
     if apply_kibana and kibana_url and assets.get("kibana_saved_objects"):
@@ -328,7 +309,7 @@ def main() -> int:
         print(f"   data stream: {summary['data_stream']}")
         if summary["bootstrap_index"]:
             bs = summary["bootstrap_index"]
-            print(f"   bootstrap: {bs.get('data_stream') or bs.get('write_index')} ({bs['status']})")
+            print(f"   bootstrap: {bs['data_stream']} ({bs['status']})")
         if summary.get("kibana"):
             print(f"   kibana objects: {summary['kibana']['count']}")
         return 0

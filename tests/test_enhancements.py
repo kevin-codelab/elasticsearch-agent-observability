@@ -41,8 +41,8 @@ class ContractTestEvents(unittest.TestCase):
         self.assertTrue(CONTRACT_EVENTS_PATH.exists())
         self.assertGreater(len(self.events), 0)
 
-    def test_pipeline_has_all_legacy_rename_processors(self) -> None:
-        """Ensure the pipeline contains rename processors for all legacy fields in event samples."""
+    def test_contract_events_are_ecs_native_only(self) -> None:
+        """Reference samples should already use ECS / GenAI field names for the 9.x contract."""
         legacy_fields = set()
         for event in self.events:
             for field in event.get("input", {}):
@@ -52,13 +52,9 @@ class ContractTestEvents(unittest.TestCase):
                 if "." not in field and field not in ("message",):
                     legacy_fields.add(field)
 
-        rename_sources = set()
-        for proc in self.pipeline["processors"]:
-            if "rename" in proc:
-                rename_sources.add(proc["rename"]["field"])
-
-        for field in legacy_fields:
-            self.assertIn(field, rename_sources, f"Legacy field '{field}' has no rename processor in pipeline")
+        processor_types = {next(iter(proc.keys())) for proc in self.pipeline["processors"]}
+        self.assertEqual(legacy_fields, set(), f"Contract samples still contain legacy flat fields: {sorted(legacy_fields)}")
+        self.assertNotIn("rename", processor_types)
 
     def test_pipeline_redacts_sensitive_fields(self) -> None:
         """Ensure all sensitive GenAI fields from sample events have remove processors."""
@@ -229,12 +225,11 @@ class ValidateStateTests(unittest.TestCase):
         self.assertEqual(len(diffs), 1)
         self.assertEqual(diffs[0]["type"], "missing_in_remote")
 
-    def test_deep_compare_extra_key(self) -> None:
+    def test_deep_compare_extra_key_in_remote_is_ignored(self) -> None:
         a = {"key": "value"}
         b = {"key": "value", "extra": True}
         diffs = validate_state._deep_compare(a, b)
-        self.assertEqual(len(diffs), 1)
-        self.assertEqual(diffs[0]["type"], "extra_in_remote")
+        self.assertEqual(len(diffs), 0)
 
     def test_validate_state_reports_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

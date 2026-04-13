@@ -1,32 +1,65 @@
 # Telemetry Schema
 
-## Minimum shared fields (legacy → ECS)
+## Primary contract
 
-The repo accepts these legacy field names on ingestion and automatically renames them to ECS via the ingest pipeline:
+This repo now targets a **9.x ECS / GenAI-native ingest contract**.
 
-| Legacy field | ECS field |
-|---|---|
-| `agent_id` | `agent.id` |
-| `run_id` | `gen_ai.agent.run_id` |
-| `turn_id` | `gen_ai.agent.turn_id` |
-| `span_id` | `span.id` |
-| `parent_span_id` | `parent.id` |
-| `signal_type` | `gen_ai.agent.signal_type` |
-| `semantic_kind` | `gen_ai.agent.semantic_kind` |
-| `tool_name` | `gen_ai.agent.tool_name` |
-| `model_name` | `gen_ai.agent.model_name` |
-| `latency_ms` | `gen_ai.agent.latency_ms` (also computes `event.duration` in ns) |
-| `token_input` | `gen_ai.usage.input_tokens` |
-| `token_output` | `gen_ai.usage.output_tokens` |
-| `cost` | `gen_ai.agent.cost` |
-| `error_type` | `gen_ai.agent.error_type` |
-| `retry_count` | `gen_ai.agent.retry_count` |
-| `mcp_method_name` | `gen_ai.agent.mcp_method_name` |
-| `session_id` | `gen_ai.agent.session_id` |
-| `captured_at` | alias → `@timestamp` |
+Send canonical fields directly:
 
-ECS fields (`@timestamp`, `event.outcome`, `service.name`, etc.) are also accepted directly and won't be renamed.
+- `@timestamp`
+- `event.*`
+- `service.*`
+- `agent.*`
+- `trace.id`
+- `span.id`
+- `parent.id`
+- `transaction.id`
+- `gen_ai.agent.*`
+- `gen_ai.usage.*`
+- `gen_ai.guardrail.*`
+- `gen_ai.evaluation.*`
+
+## Component type tagging
+
+Use `gen_ai.agent.component_type` to tag spans with their component category:
+
+- `runtime` — agent runtime entrypoint
+- `llm` — model inference call
+- `tool` — tool execution
+- `mcp` — MCP protocol call
+- `memory` — memory store read/write
+- `knowledge` — knowledge base / RAG retrieval
+- `guardrail` — safety check / content filter
+
+This enables per-component monitoring in Kibana (similar to AgentKit's per-component dashboards).
+
+## Memory / knowledge monitoring fields
+
+- `gen_ai.agent.retrieval_latency_ms` — retrieval round-trip time
+- `gen_ai.agent.cache_hit` — whether the retrieval hit a cache
+- `gen_ai.agent.retrieval_score` — similarity / relevance score
+- `gen_ai.agent.knowledge_source` — knowledge base identifier
+
+## Guardrail / safety fields
+
+- `gen_ai.guardrail.action` — `pass` / `block` / `redact`
+- `gen_ai.guardrail.rule_id` — which guardrail rule fired
+- `gen_ai.guardrail.category` — `content_safety` / `prompt_injection` / `pii` / `custom`
+- `gen_ai.guardrail.latency_ms` — guardrail check latency
+
+## Evaluation observability fields
+
+- `gen_ai.evaluation.run_id` — evaluation run identifier
+- `gen_ai.evaluation.evaluator` — evaluator name
+- `gen_ai.evaluation.score` — numeric score
+- `gen_ai.evaluation.outcome` — `pass` / `fail` / `degraded`
+- `gen_ai.evaluation.dimension` — `quality` / `safety` / `latency` / `cost`
+
+## Important rule
+
+Do **not** rely on flat legacy fields such as `agent_id`, `tool_name`, `token_input`, or `captured_at`.
+The generated ingest pipeline no longer remaps those fields for you.
 
 ## Time field
 
-The canonical time field is `@timestamp`. `captured_at` is kept as an alias for backward compatibility.
+The canonical and default reporting time field is `@timestamp`.

@@ -28,10 +28,13 @@ from render_collector_config import render_config
 from render_elastic_agent_assets import SUPPORTED_INGEST_MODES, render_assets as render_elastic_native_assets
 from render_es_assets import render_assets
 from render_instrument_snippet import render_snippet_to_file
+from render_otlp_http_bridge import render_bridge_script
 
 DEFAULT_OTLP_ENDPOINT = "http://127.0.0.1:4317"
 DEFAULT_COLLECTOR_BIN = "otelcol-contrib"
 DEFAULT_INGEST_MODE = "collector"
+DEFAULT_BRIDGE_BIND_HOST = "127.0.0.1"
+DEFAULT_BRIDGE_HTTP_PORT = 14319
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,6 +60,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--time-range", default="now-24h")
     parser.add_argument("--otlp-endpoint", default=DEFAULT_OTLP_ENDPOINT)
     parser.add_argument("--collector-bin", default=DEFAULT_COLLECTOR_BIN)
+    parser.add_argument("--telemetry-metrics-port", type=int, default=8888, help="Collector self-telemetry Prometheus port")
+    parser.add_argument("--bridge-bind-host", default=DEFAULT_BRIDGE_BIND_HOST, help="OTLP HTTP bridge fallback bind host")
+    parser.add_argument("--bridge-http-port", type=int, default=DEFAULT_BRIDGE_HTTP_PORT, help="OTLP HTTP bridge fallback port")
     parser.add_argument("--ingest-mode", choices=SUPPORTED_INGEST_MODES, default=DEFAULT_INGEST_MODE)
     parser.add_argument("--fleet-server-url", default="")
     parser.add_argument("--fleet-enrollment-token", default="")
@@ -76,6 +82,8 @@ def collect_summary_notes(
     auth_mode: str,
     index_prefix: str,
     ingest_mode: str,
+    bridge_bind_host: str,
+    bridge_http_port: int,
     apply_kibana_assets: bool = False,
     has_elastic_native_bundle: bool = False,
     dry_run: bool = False,
@@ -91,6 +99,7 @@ def collect_summary_notes(
         notes.append(
             "Collector YAML uses `${env:ELASTICSEARCH_USERNAME}` and `${env:ELASTICSEARCH_PASSWORD}` placeholders; credentials were not written to disk."
         )
+        notes.append("If you update `agent-otel.env`, restart the Collector process; it reads env only at startup.")
     elif auth_mode == "inline":
         notes.append("Collector YAML includes inline Elasticsearch credentials; treat the generated file as secret material.")
     notes.append(f"Logs and traces both write to `{index_prefix}-events`, which matches the generated rollover alias and index template.")
@@ -101,10 +110,19 @@ def collect_summary_notes(
     notes.append(f"Selected ingest mode: `{ingest_mode}`.")
     if ingest_mode in {"collector", "apm-otlp-hybrid"}:
         notes.append(
-            "The generated Collector config uses contrib-only components such as `spanmetrics` and the Elasticsearch exporter; the launcher defaults to `otelcol-contrib`, or another compatible custom distribution."
+            "The generated Collector config uses contrib-only components such as `spanmetrics`, the transform processor, and the Elasticsearch exporter; the launcher defaults to `otelcol-contrib`, or another compatible custom distribution."
+        )
+        notes.append("Collector self-telemetry binds Prometheus metrics to `127.0.0.1:8888` by default; rerender with `--telemetry-metrics-port` if you need a side-by-side debug Collector.")
+        notes.append(
+            f"The generated Elasticsearch exporters statically route `logs_index` and `traces_index` to the `{index_prefix}-events` alias, and `metrics_index` to `{index_prefix}-metrics`."
+        )
+        notes.append("The generated Collector config forces `elastic.mapping.mode=ecs` and restricts `mapping.allowed_modes` to `ecs` so exporter output stays aligned with the ECS-first Elasticsearch assets and report queries.")
+        notes.append("If a debug Collector proves OTLP receive is healthy but Elasticsearch stays empty, inspect the `exporters.elasticsearch/*` block first; the remaining failure domain is Collector → Elasticsearch exporter.")
+        notes.append(
+            f"An OTLP HTTP bridge fallback is also generated at `http://{bridge_bind_host}:{bridge_http_port}` for `logs` and `traces`; use it when the Collector exporter path is blocked, and keep metrics on the Collector path."
         )
     if has_elastic_native_bundle:
-        notes.append("Elastic-native starter assets were rendered, including Elastic Agent / Fleet / APM bootstrap files for operator review.")
+        notes.append("Elastic-native starter assets were rendered, including Elastic Agent / Fleet wiring plus APM, RUM, and profiling starter files for operator review.")
     if apply_kibana_assets:
         notes.append("Kibana saved objects are part of the generated asset surface, so the human-facing report path can land in Kibana instead of living only in Markdown.")
     if dry_run:
@@ -112,21 +130,32 @@ def collect_summary_notes(
     return notes
 
 
-def build_runtime_env(*, service_name: str, environment: str, otlp_endpoint: str, apm_server_url: str = "") -> str:
-    return "\n".join(
-        [
-            "# Agent OTLP runtime defaults",
-            f"OTEL_EXPORTER_OTLP_ENDPOINT={otlp_endpoint}",
-            "OTEL_EXPORTER_OTLP_PROTOCOL=grpc",
-            f"OTEL_SERVICE_NAME={service_name}",
-            f"OTEL_RESOURCE_ATTRIBUTES=deployment.environment={environment},observer.product=elasticsearch-agent-observability",
-            f"ELASTIC_APM_SERVER_URL={apm_server_url}",
-            "# Fill these only if your Collector exporter uses env placeholders.",
-            "ELASTICSEARCH_USERNAME=",
-            "ELASTICSEARCH_PASSWORD=",
-            "",
-        ]
-    )
+def build_runtime_env(
+    *,
+    service_name: str,
+    environment: str,
+    otlp_endpoint: str,
+    apm_server_url: str = "",
+    include_es_placeholders: bool = False,
+) -> str:
+    lines = [
+        "# Agent OTLP runtime defaults",
+        f"OTEL_EXPORTER_OTLP_ENDPOINT={otlp_endpoint}",
+        "OTEL_EXPORTER_OTLP_PROTOCOL=grpc",
+        f"OTEL_SERVICE_NAME={service_name}",
+        f"OTEL_RESOURCE_ATTRIBUTES=deployment.environment={environment},observer.product=elasticsearch-agent-observability",
+        f"ELASTIC_APM_SERVER_URL={apm_server_url}",
+    ]
+    if include_es_placeholders:
+        lines.extend(
+            [
+                "# Prefer exporting ES credentials in the shell before launch; avoid storing real secrets in this file.",
+                "ELASTICSEARCH_USERNAME=",
+                "ELASTICSEARCH_PASSWORD=",
+            ]
+        )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def build_collector_run_script(*, collector_bin: str, collector_path: Path, env_path: Path) -> str:
@@ -147,6 +176,40 @@ def build_collector_run_script(*, collector_bin: str, collector_path: Path, env_
     )
 
 
+def build_bridge_runtime_env(*, service_name: str, environment: str, bridge_endpoint: str) -> str:
+    return "\n".join(
+        [
+            "# Agent OTLP HTTP bridge fallback defaults",
+            "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
+            f"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT={bridge_endpoint}/v1/traces",
+            f"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT={bridge_endpoint}/v1/logs",
+            "# Metrics are not bridged here; keep `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` on the Collector path if metrics matter.",
+            f"OTEL_SERVICE_NAME={service_name}",
+            f"OTEL_RESOURCE_ATTRIBUTES=deployment.environment={environment},observer.product=elasticsearch-agent-observability",
+            "ELASTICSEARCH_USERNAME=",
+            "ELASTICSEARCH_PASSWORD=",
+            "",
+        ]
+    )
+
+
+def build_bridge_run_script(*, bridge_path: Path, env_path: Path) -> str:
+    bridge_name = bridge_path.name
+    env_name = env_path.name
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            "set -a",
+            f'source "$SCRIPT_DIR/{env_name}"',
+            "set +a",
+            f'exec python3 "$SCRIPT_DIR/{bridge_name}"',
+            "",
+        ]
+    )
+
+
 def build_summary(
     *,
     discovery_path: Path,
@@ -156,6 +219,9 @@ def build_summary(
     collector_path: Path | None,
     env_path: Path | None,
     collector_run_path: Path | None,
+    bridge_path: Path | None,
+    bridge_env_path: Path | None,
+    bridge_run_path: Path | None,
     instrument_snippet_path: Path | None,
     native_assets_paths: dict[str, str] | None,
     apply_summary_path: Path | None,
@@ -182,17 +248,28 @@ def build_summary(
                 f"- agent OTLP env: `{env_path}`",
             ]
         )
+    if bridge_path and bridge_env_path and bridge_run_path:
+        lines.extend(
+            [
+                f"- OTLP HTTP bridge: `{bridge_path}`",
+                f"- bridge launcher: `{bridge_run_path}`",
+                f"- bridge env: `{bridge_env_path}`",
+            ]
+        )
     if instrument_snippet_path:
         lines.append(f"- instrument snippet: `{instrument_snippet_path}`")
     if native_assets_paths:
-        lines.extend(
-            [
-                f"- elastic-native policy: `{native_assets_paths['policy']}`",
-                f"- elastic-native env: `{native_assets_paths['env']}`",
-                f"- elastic-native launcher: `{native_assets_paths['launcher']}`",
-                f"- elastic-native readme: `{native_assets_paths['readme']}`",
-            ]
-        )
+        native_labels = [
+            ("policy", "elastic-native policy"),
+            ("env", "elastic-native env"),
+            ("launcher", "elastic-native launcher"),
+            ("readme", "elastic-native readme"),
+            ("apm_env", "APM env"),
+            ("apm_readme", "APM entrypoints"),
+            ("rum_snippet", "RUM snippet"),
+            ("profiling_readme", "profiling starter"),
+        ]
+        lines.extend(f"- {label}: `{native_assets_paths[key]}`" for key, label in native_labels if key in native_assets_paths)
     if apply_summary_path:
         lines.append(f"- apply summary: `{apply_summary_path}`")
     if sanity_check_path:
@@ -230,6 +307,8 @@ def main() -> int:
         index_prefix = validate_index_prefix(args.index_prefix)
         retention_days = validate_positive_int(args.retention_days, "Retention days")
         max_files = validate_positive_int(args.max_files, "Max files")
+        bridge_http_port = validate_positive_int(args.bridge_http_port, "Bridge HTTP port")
+        bridge_bind_host = args.bridge_bind_host.strip() or DEFAULT_BRIDGE_BIND_HOST
         credentials = validate_credential_pair(args.es_user, args.es_password)
         auth_mode = "none"
         if credentials:
@@ -242,6 +321,9 @@ def main() -> int:
         collector_path: Path | None = None
         env_path: Path | None = None
         collector_run_path: Path | None = None
+        bridge_path: Path | None = None
+        bridge_env_path: Path | None = None
+        bridge_run_path: Path | None = None
         if args.ingest_mode in {"collector", "apm-otlp-hybrid"}:
             collector_path = output_dir / "otel-collector.generated.yaml"
             collector_text = render_config(
@@ -253,6 +335,7 @@ def main() -> int:
                 es_user=credentials[0] if credentials else "",
                 es_password=credentials[1] if credentials else "",
                 embed_credentials=args.embed_es_credentials,
+                telemetry_metrics_port=args.telemetry_metrics_port,
             )
             write_text(collector_path, collector_text)
             env_path = output_dir / "agent-otel.env"
@@ -263,6 +346,7 @@ def main() -> int:
                     environment=args.environment,
                     otlp_endpoint=args.otlp_endpoint,
                     apm_server_url=args.apm_server_url,
+                    include_es_placeholders=bool(credentials and not args.embed_es_credentials),
                 ),
             )
             collector_run_path = output_dir / "run-collector.sh"
@@ -271,6 +355,35 @@ def main() -> int:
                 build_collector_run_script(collector_bin=args.collector_bin, collector_path=collector_path, env_path=env_path),
             )
             collector_run_path.chmod(0o755)
+
+            bridge_endpoint = f"http://{bridge_bind_host}:{bridge_http_port}"
+            bridge_path = output_dir / "otlphttpbridge.py"
+            write_text(
+                bridge_path,
+                render_bridge_script(
+                    es_url=args.es_url,
+                    index_prefix=index_prefix,
+                    bind_host=bridge_bind_host,
+                    bind_port=bridge_http_port,
+                    verify_tls=not args.no_verify_tls,
+                ),
+            )
+            bridge_path.chmod(0o755)
+            bridge_env_path = output_dir / "agent-otel-bridge.env"
+            write_text(
+                bridge_env_path,
+                build_bridge_runtime_env(
+                    service_name=args.service_name,
+                    environment=args.environment,
+                    bridge_endpoint=bridge_endpoint,
+                ),
+            )
+            bridge_run_path = output_dir / "run-otlphttpbridge.sh"
+            write_text(
+                bridge_run_path,
+                build_bridge_run_script(bridge_path=bridge_path, env_path=bridge_env_path),
+            )
+            bridge_run_path.chmod(0o755)
 
         native_assets_paths = None
         if args.ingest_mode in {"elastic-agent-fleet", "apm-otlp-hybrid"}:
@@ -359,6 +472,8 @@ def main() -> int:
             auth_mode=auth_mode,
             index_prefix=index_prefix,
             ingest_mode=args.ingest_mode,
+            bridge_bind_host=bridge_bind_host,
+            bridge_http_port=bridge_http_port,
             apply_kibana_assets=args.apply_kibana_assets,
             has_elastic_native_bundle=bool(native_assets_paths),
             dry_run=args.dry_run,
@@ -377,10 +492,12 @@ def main() -> int:
             notes.append("A markdown/json smoke report was also generated so you can validate the query path before opening Kibana.")
         if collector_run_path and env_path:
             notes.append("Use `run-collector.sh` to start the Collector and `agent-otel.env` as the runtime env template for the agent process.")
+        if bridge_run_path and bridge_env_path:
+            notes.append("Use `run-otlphttpbridge.sh` plus `agent-otel-bridge.env` when you need a logs/traces-only fallback that bypasses the Collector Elasticsearch exporter.")
         if instrument_snippet_path:
             notes.append("`agent_otel_bootstrap.py` is a starter snippet for Python runtimes; you still need to import or wire it into the actual agent entrypoint.")
         if native_assets_paths:
-            notes.append("Use the `elastic-native` bundle when the operator prefers Fleet enrollment or APM/OTLP hybrid wiring instead of Collector-only mode.")
+            notes.append("Use the `elastic-native` bundle when the operator prefers Fleet enrollment or APM/OTLP hybrid wiring, and when Kibana APM / Traces / Service Map / User Experience / profiling surfaces should stay native instead of being reimplemented as custom dashboards.")
         notes.append(
             f"Use `alert_and_diagnose.py --es-url {args.es_url} --index-prefix {index_prefix} --time-range now-15m` to run alert checks with root-cause analysis. "
             "Add `--write-to-es` to persist alert history, `--generate-crontab` for scheduling, or `--webhook-url` for push notifications."
@@ -397,6 +514,9 @@ def main() -> int:
                 collector_path=collector_path,
                 env_path=env_path,
                 collector_run_path=collector_run_path,
+                bridge_path=bridge_path,
+                bridge_env_path=bridge_env_path,
+                bridge_run_path=bridge_run_path,
                 instrument_snippet_path=instrument_snippet_path,
                 native_assets_paths=native_assets_paths,
                 apply_summary_path=apply_summary_path,
@@ -411,6 +531,8 @@ def main() -> int:
             print(f"   collector: {collector_path}")
         if collector_run_path:
             print(f"   launcher: {collector_run_path}")
+        if bridge_run_path:
+            print(f"   bridge launcher: {bridge_run_path}")
         if instrument_snippet_path:
             print(f"   instrument snippet: {instrument_snippet_path}")
         if native_assets_paths:

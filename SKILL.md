@@ -40,11 +40,12 @@ That path should:
 
 1. validate the workspace
 2. discover likely monitorable modules
-3. render Collector config, env file, and launcher
+3. render Collector config, env file, launcher, and OTLP HTTP bridge fallback artifacts
 4. render Elasticsearch assets
-5. optionally generate a Python instrumentation starter file
-6. optionally dry-run or apply Elasticsearch and Kibana assets
-7. optionally generate a smoke report after a real apply
+5. render Elastic-native starter assets for APM / RUM / profiling when the ingest mode calls for it
+6. optionally generate a Python instrumentation starter file
+7. optionally dry-run or apply Elasticsearch and Kibana assets
+8. optionally generate a smoke report after a real apply
 
 ## Product Boundary
 
@@ -53,15 +54,18 @@ Keep the boundary honest.
 Current repo capabilities are best described as:
 
 - Collector-side integration artifacts (traces + logs + metrics pipelines)
+- OTLP HTTP bridge fallback artifacts for logs/traces when the Collector Elasticsearch exporter is the blocked layer
 - Elasticsearch storage assets (data streams, ECS mappings, component templates, tiered ILM)
 - Kibana data view, saved search, Lens visualizations, and a starter dashboard
+- Elastic-native starter assets for APM traces, Kibana native app entrypoints, trace-analysis playbooks, browser RUM, UX rollout, and profiling notes
 - standalone alert + root-cause analysis script (no Kibana Alerting license needed)
 - alert → insight-store bridge for automatic RCA conclusion archival
-- auto-instrumentation starter snippet for Python agents
+- auto-instrumentation starter snippet for Python agents (Go / Java / TypeScript agents should wire OTel SDK directly)
 - dry-run planning before touching a live ES / Kibana target
 - configuration drift detection between local assets and live cluster
 - observability maturity scoring with upgrade guidance
 - dashboard extensions via external JSON/YAML panel declarations
+- ECS / GenAI-native ingest contract with no legacy flat-field remap
 - all features target the Basic (free) Elasticsearch license
 
 Do not claim that the repo already:
@@ -76,6 +80,7 @@ Do not claim that the repo already:
 The generated Collector config uses contrib-only components such as `spanmetrics` and the Elasticsearch exporter.
 Default the launcher to `otelcol-contrib`, or document the need for an equivalent custom Collector distribution.
 Do not imply that a minimal core `otelcol` binary is enough.
+If OTLP receive is healthy but the Elasticsearch exporter is the blocked layer, the generated OTLP HTTP bridge fallback is the honest short-term escape hatch for logs/traces.
 
 ## Security Rule
 
@@ -120,3 +125,4 @@ Read these before changing promises or output shape:
 - `references/reporting.md`
 - `references/telemetry_schema.md`
 - `references/architecture.md`
+- `references/runtime_compat.md`

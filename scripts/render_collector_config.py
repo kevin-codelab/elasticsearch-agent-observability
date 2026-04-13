@@ -21,6 +21,25 @@ from common import (
 
 DEFAULT_ES_USER_ENV = "ELASTICSEARCH_USERNAME"
 DEFAULT_ES_PASSWORD_ENV = "ELASTICSEARCH_PASSWORD"
+DEFAULT_SPANMETRICS_DIMENSIONS = (
+    "service.name",
+    "gen_ai.agent.tool_name",
+    "gen_ai.agent.model_name",
+    "event.outcome",
+)
+
+
+def _normalize_spanmetrics_dimensions(dimensions: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    ordered = dimensions or list(DEFAULT_SPANMETRICS_DIMENSIONS)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in ordered:
+        value = str(item).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,6 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--embed-es-credentials", action="store_true", help="Embed Elasticsearch credentials into the generated YAML")
     parser.add_argument("--grpc-port", type=int, default=4317)
     parser.add_argument("--http-port", type=int, default=4318)
+    parser.add_argument("--telemetry-metrics-port", type=int, default=8888)
     parser.add_argument("--sampling-ratio", type=float, default=1.0, help="Probabilistic sampling ratio (0.0 to 1.0)")
     parser.add_argument("--enable-filelog", action="store_true", help="Add filelog receiver for local agent log files")
     parser.add_argument("--filelog-path", default="/var/log/agent/*.log")
@@ -58,6 +78,7 @@ def render_config(
     embed_credentials: bool = False,
     grpc_port: int = 4317,
     http_port: int = 4318,
+    telemetry_metrics_port: int = 8888,
     sampling_ratio: float = 1.0,
     enable_filelog: bool = False,
     filelog_path: str = "/var/log/agent/*.log",
@@ -120,24 +141,23 @@ def render_config(
 """
         sampling_processor_ref = ", probabilistic_sampler"
 
+    spanmetrics_dimensions = "\n".join(
+        f"      - name: {dimension}" for dimension in _normalize_spanmetrics_dimensions()
+    )
+
     return f"""receivers:
   otlp:
     protocols:
       grpc:
-        endpoint: "0.0.0.0:{grpc_port}"
+        endpoint: "127.0.0.1:{grpc_port}"
       http:
-        endpoint: "0.0.0.0:{http_port}"
+        endpoint: "127.0.0.1:{http_port}"
+        # Change to 0.0.0.0 only if external OTLP senders need network access.
 {filelog_block}
 connectors:
   spanmetrics:
-    histogram:
-      explicit:
-        boundaries: [10, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
     dimensions:
-      - name: service.name
-      - name: gen_ai.agent.tool_name
-      - name: gen_ai.agent.model_name
-      - name: event.outcome
+{spanmetrics_dimensions}
 
 processors:
   memory_limiter:
@@ -149,6 +169,20 @@ processors:
   resource/runtime:
     attributes:
 {resource_actions}
+  transform/elastic_mapping:
+    error_mode: ignore
+    log_statements:
+      - context: scope
+        statements:
+          - set(attributes["elastic.mapping.mode"], "ecs")
+    trace_statements:
+      - context: scope
+        statements:
+          - set(attributes["elastic.mapping.mode"], "ecs")
+    metric_statements:
+      - context: scope
+        statements:
+          - set(attributes["elastic.mapping.mode"], "ecs")
   attributes/redact:
     actions:
       - key: gen_ai.prompt
@@ -165,23 +199,30 @@ exporters:
     endpoints: [{_yaml_scalar(es_url)}]{auth_lines}
     logs_index: {_yaml_scalar(events_alias)}
     traces_index: {_yaml_scalar(events_alias)}
+    mapping:
+      allowed_modes: [ecs]
   elasticsearch/metrics:
     endpoints: [{_yaml_scalar(es_url)}]{auth_lines}
     metrics_index: {_yaml_scalar(metrics_index)}
+    mapping:
+      allowed_modes: [ecs]
 
 service:
+  telemetry:
+    metrics:
+      address: "127.0.0.1:{telemetry_metrics_port}"
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, resource/runtime, attributes/redact{sampling_processor_ref}, batch]
+      processors: [memory_limiter, resource/runtime, transform/elastic_mapping, attributes/redact{sampling_processor_ref}, batch]
       exporters: [elasticsearch/events, spanmetrics]
     logs:
       receivers: [otlp{filelog_receiver_ref}]
-      processors: [memory_limiter, resource/runtime, attributes/redact, batch]
+      processors: [memory_limiter, resource/runtime, transform/elastic_mapping, attributes/redact, batch]
       exporters: [elasticsearch/events]
     metrics:
       receivers: [otlp, spanmetrics]
-      processors: [memory_limiter, resource/runtime, batch]
+      processors: [memory_limiter, resource/runtime, transform/elastic_mapping, batch]
       exporters: [elasticsearch/metrics]
 """
 
@@ -202,6 +243,7 @@ def main() -> int:
             embed_credentials=args.embed_es_credentials,
             grpc_port=args.grpc_port,
             http_port=args.http_port,
+            telemetry_metrics_port=args.telemetry_metrics_port,
             sampling_ratio=args.sampling_ratio,
             enable_filelog=args.enable_filelog,
             filelog_path=args.filelog_path,

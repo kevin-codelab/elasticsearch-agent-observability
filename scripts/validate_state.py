@@ -43,16 +43,18 @@ def parse_args() -> argparse.Namespace:
 
 
 def _deep_compare(local: Any, remote: Any, path: str = "") -> list[dict[str, Any]]:
-    """Recursively compare two nested structures, returning a list of diffs."""
+    """Recursively compare two nested structures, returning a list of diffs.
+
+    Only keys present in *local* are checked. Extra keys in remote (ES metadata
+    like ``version``, ``in_use_by``, etc.) are silently ignored to avoid false
+    drift reports.
+    """
     diffs: list[dict[str, Any]] = []
     if isinstance(local, dict) and isinstance(remote, dict):
-        all_keys = set(local.keys()) | set(remote.keys())
-        for key in sorted(all_keys):
+        for key in sorted(local.keys()):
             child_path = f"{path}.{key}" if path else key
             if key not in remote:
                 diffs.append({"path": child_path, "type": "missing_in_remote", "local": local[key]})
-            elif key not in local:
-                diffs.append({"path": child_path, "type": "extra_in_remote", "remote": remote[key]})
             else:
                 diffs.extend(_deep_compare(local[key], remote[key], child_path))
     elif isinstance(local, list) and isinstance(remote, list):

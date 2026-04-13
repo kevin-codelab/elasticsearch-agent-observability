@@ -17,6 +17,11 @@ Before rendering config, it tries to infer what the agent actually contains:
 - memory or cache layers
 - MCP-related surfaces
 - evaluation or regression hooks
+- OTel SDK / Elastic APM / Elastic Agent presence
+- web service entrypoints (FastAPI, Flask, Express, Gin, Spring, etc.)
+- browser frontends (React, Vue, Next.js, etc.)
+- guardrails / safety checks / content filters
+- knowledge bases / RAG retrieval (Qdrant, Pinecone, Chroma, FAISS, etc.)
 
 ## Pipeline
 

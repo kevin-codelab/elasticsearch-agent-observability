@@ -18,7 +18,12 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_GENERATED_DIR = ROOT_DIR / "generated"
 TEXT_SUFFIXES = {
-    ".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".sh", ".js", ".ts", ".tsx", ".jsx",
+    ".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".sh", ".js", ".ts", ".tsx", ".jsx",
+    ".go", ".java", ".kt", ".kts", ".scala", ".rs", ".rb", ".cs", ".swift",
+    ".html", ".css", ".scss", ".vue", ".svelte",
+    ".c", ".cpp", ".h", ".hpp",
+    ".env", ".properties", ".gradle",
 }
 IGNORE_DIR_NAMES = {
     ".git", ".codebuddy", "node_modules", "vendor", "dist", "build", "coverage", "__pycache__", ".idea", ".vscode",

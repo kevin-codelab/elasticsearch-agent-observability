@@ -62,7 +62,7 @@ MODULE_RULES = {
     "model_adapter": {
         "priority": 90,
         "path_keywords": ["llm", "model", "openai", "anthropic", "prompt"],
-        "content_keywords": ["openai", "anthropic", "model", "completion", "messages", "token"],
+        "content_keywords": ["openai", "anthropic", "model", "completion", "messages", "token", "go-openai", "sashabaranov", "langchain", "llamaindex"],
         "signals": ["model_calls", "token_usage", "cost", "latency", "model_errors"],
     },
     "memory_store": {
@@ -106,6 +106,76 @@ MODULE_RULES = {
         "path_keywords": ["elastic-agent", "fleet", "beats"],
         "content_keywords": ["fleet", "elastic-agent", "enrollment token", "policy id"],
         "signals": ["fleet_enrollment", "agent_policy", "host_metrics"],
+    },
+    "browser_frontend": {
+        "priority": 83,
+        "path_keywords": ["package.json", "src/main.", "app.tsx", "app.jsx", "pages/", "frontend"],
+        "content_keywords": [
+            "@elastic/apm-rum",
+            "reactdom.createroot",
+            "react-router",
+            "vue-router",
+            "next/router",
+            "window.location.pathname",
+        ],
+        "signals": ["page_loads", "route_changes", "frontend_errors", "web_vitals", "frontend_trace_correlation"],
+    },
+    "web_service": {
+        "priority": 83,
+        "path_keywords": ["routes/", "api/", "server.ts", "server.js", "main.py", "app.py", "main.go"],
+        "content_keywords": [
+            "fastapi",
+            "flask",
+            "django",
+            "express(",
+            "koa(",
+            "http.createserver",
+            "apirouter",
+            "@app.route",
+            "router.get(",
+            "router.post(",
+            "uvicorn.run",
+            "gin.default()",
+            "http.listenandserve",
+            "actix_web",
+            "axum",
+            "@restcontroller",
+            "@requestmapping",
+            "spring",
+        ],
+        "signals": ["http_requests", "route_latency", "backend_errors", "distributed_tracing"],
+    },
+    "guardrail": {
+        "priority": 82,
+        "path_keywords": ["guardrail", "safety", "content_filter", "moderation"],
+        "content_keywords": [
+            "guardrail",
+            "content_filter",
+            "moderation",
+            "prompt_injection",
+            "content_safety",
+            "safety_check",
+            "block_response",
+            "redact",
+        ],
+        "signals": ["guardrail_checks", "guardrail_blocks", "guardrail_latency", "safety_events"],
+    },
+    "knowledge_base": {
+        "priority": 82,
+        "path_keywords": ["knowledge", "rag", "retrieval", "embedding", "vector"],
+        "content_keywords": [
+            "knowledge_base",
+            "retrieval_augmented",
+            "embedding",
+            "vector_search",
+            "similarity_search",
+            "chroma",
+            "pinecone",
+            "weaviate",
+            "qdrant",
+            "faiss",
+        ],
+        "signals": ["retrieval_calls", "retrieval_latency", "retrieval_scores", "embedding_latency"],
     },
 }
 
@@ -169,12 +239,12 @@ def recommend_ingest_modes(detected_modules: list[dict[str, Any]], recommended_s
             "prerequisites": ["OTLP endpoint reachable", "Collector binary available"],
         }
     ]
-    if {"existing_observability", "otel_sdk_surface", "elastic_apm"} & kinds or {"otlp_ingest", "trace_bridge"} & signals:
+    if {"existing_observability", "otel_sdk_surface", "elastic_apm", "browser_frontend", "web_service"} & kinds or {"otlp_ingest", "trace_bridge", "frontend_trace_correlation", "distributed_tracing"} & signals:
         recommendations.append(
             {
                 "mode": "apm-otlp-hybrid",
                 "score": 0.88,
-                "why": "Best fit when the workspace already speaks OTLP or APM and you want Elastic-native semantics without dropping Collector support.",
+                "why": "Best fit when the workspace already speaks OTLP, APM, frontend RUM, or backend HTTP services and you want Elastic-native semantics without dropping Collector support.",
                 "prerequisites": ["APM endpoint or Fleet policy available", "OTLP exporter or SDK hooks present"],
             }
         )
