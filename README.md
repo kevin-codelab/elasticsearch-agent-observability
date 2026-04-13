@@ -45,21 +45,26 @@ Clone it into your agent's skill directory:
 git clone https://github.com/kevin-codelab/elasticsearch-agent-observability.git <skill-dir>/elasticsearch-agent-observability
 ```
 
-Any agent runtime that resolves `SKILL.md` can load this repository as a skill.
+The repo uses the `SKILL.md + scripts + references` shape so an agent runtime can call a shared observability workflow.
 
-## Compatibility
+## Who this is for
 
-- **CodeBuddy**
-- **Claude Code**
-- **OpenClaw** with a thin wrapper that points to the same scripts
+- **Agent operators / platform engineers** who own the runtime, deployment environment, or observability stack
+- **Application engineers** who can review generated config and coordinate with the operator side
+- **Not end users** of the agent product; this repo does not assume a chat user can deploy a Collector, enroll Fleet, or change Kibana/Elasticsearch directly
+
+## Operating model
+
+This repo generates the observability bundle and rollout contract for an agent system.
+It is meant to help the people who run or maintain that system, not the people who merely use the agent.
 
 ## When to use it
 
 Use this skill for requests like:
 
-- "add observability to this agent"
-- "set up OpenTelemetry, Elasticsearch, and Kibana for this workspace"
-- "generate the Collector, Elasticsearch, and Kibana assets"
+- "add observability to this agent service"
+- "generate the Collector, Elasticsearch, and Kibana assets for operator review"
+- "prepare an Elastic-native rollout bundle for this agent runtime"
 - "check whether the observability setup drifted from the cluster"
 - "diagnose recent agent failures and store the conclusion"
 
