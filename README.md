@@ -30,20 +30,21 @@ To go further, read [`references/post_bootstrap_playbook.md`](references/post_bo
 
 ## What you get
 
-| Layer | Asset | Notes |
-|---|---|---|
-| Collection | `otel-collector.generated.yaml` + `run-collector.sh` + `agent-otel.env` | Requires `otelcol-contrib` (spanmetrics + ES exporter) |
-| Bridge fallback | `otlphttpbridge.py` + launcher | Recommended path for first install; logs/traces only |
-| Storage | data stream + component templates + index template + ingest pipeline + ILM | ECS / GenAI native, ES 9.x |
-| Kibana | data view + saved searches + Lens visualizations + dashboard | Imported via saved-objects API |
-| Instrumentation starter | Python (auto-patches OpenAI / Anthropic) **or** Node/TS (preloadable `@opentelemetry/sdk-node`) | Choose with `--instrument-runtime python\|node\|auto` |
-| LLM proxy starter | LiteLLM `docker-compose.yaml` + config + README | Zero-code path for upstream OSS agents (e.g. `openclaw/openclaw`) |
-| Diagnose | `alert_and_diagnose.py` — 6 anomaly rules + RCA | Standalone, no Kibana Alerting license needed |
-| Drift check | `validate_state.py` — local assets vs live cluster | |
-| Verify | `verify_pipeline.py` — canary OTLP + ES poll | Auto-runs after `--apply-es-assets` |
-| Knowledge archival | RCA → `elasticsearch-insight-store` | Optional bridge |
+After one bootstrap, you can answer these questions about your agent without building any of it by hand:
 
-What it **does not** do: rewire your agent SDK automatically, ship a complete Kibana suite, auto-enroll Fleet, or instrument arbitrary runtimes for you.
+- **"Where is my token budget going?"** Per-model and per-tool token totals, with anomaly alerts when consumption suddenly multiplies.
+- **"Which tools / models are slow or failing?"** P50/P95 latency and error rate per tool and per model, broken down by session.
+- **"Why was last Tuesday slow?"** Click any spike to drill into the actual session, the actual turn, and the actual root cause sentence (RCA is generated, not just charted).
+- **"Did anyone change my config behind my back?"** Drift detection between the assets the skill rendered and what the live ES cluster actually has.
+- **"Is my pipeline even working right now?"** A canary runs at the end of every bootstrap and tells you `ok` or "do this next" — no more "Collector says sent, ES says nothing".
+- **"How do I keep this knowledge after the incident?"** RCA conclusions can flow straight into `elasticsearch-insight-store` so the next on-call engineer sees them.
+
+Two paths to feed it data, depending on whether you own the agent code:
+
+- **Own the agent (Python or Node/TS)** → install the generated instrumentation starter; calls to OpenAI/Anthropic become traced spans automatically, with optional wrappers for tool calls and sessions.
+- **Don't own the agent** (e.g. `openclaw/openclaw` or any upstream OSS agent) → run the generated LLM proxy bundle (`docker compose up -d`) and point the agent's `OPENAI_API_BASE` at `localhost:4000`. Zero source changes.
+
+What it deliberately **does not** do: rewrite your agent code, ship a full enterprise Kibana suite, auto-enroll Fleet, or pretend to instrument runtimes the OTel SDK doesn't cover.
 
 ## Common commands
 
