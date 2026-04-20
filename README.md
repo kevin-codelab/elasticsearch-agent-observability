@@ -30,21 +30,21 @@ To go further, read [`references/post_bootstrap_playbook.md`](references/post_bo
 
 ## What you get
 
-After one bootstrap, you can answer these questions about your agent without building any of it by hand:
+After one bootstrap you have a working observability backbone for your agent: a Kibana surface that shows real cost, latency, and failure patterns; an alert flow that doesn't just chart anomalies but also explains them; and a lightweight feedback loop that catches config drift and pipeline breakage before they become outages. The skill keeps you honest — every dashboard panel and every alert rule is wired to a specific data field, so what you see is what your agent actually emitted, not a smoothed-over template.
 
-- **"Where is my token budget going?"** Per-model and per-tool token totals, with anomaly alerts when consumption suddenly multiplies.
-- **"Which tools / models are slow or failing?"** P50/P95 latency and error rate per tool and per model, broken down by session.
-- **"Why was last Tuesday slow?"** Click any spike to drill into the actual session, the actual turn, and the actual root cause sentence (RCA is generated, not just charted).
-- **"Did anyone change my config behind my back?"** Drift detection between the assets the skill rendered and what the live ES cluster actually has.
-- **"Is my pipeline even working right now?"** A canary runs at the end of every bootstrap and tells you `ok` or "do this next" — no more "Collector says sent, ES says nothing".
-- **"How do I keep this knowledge after the incident?"** RCA conclusions can flow straight into `elasticsearch-insight-store` so the next on-call engineer sees them.
+Concretely, the questions it lets you answer:
 
-Two paths to feed it data, depending on whether you own the agent code:
+- Where is my token budget going, and when did it spike?
+- Which tools and models are slow, error-prone, or both?
+- Why was last Tuesday slow — down to the session, the turn, and a generated root cause?
+- Did anyone change my cluster config since the last deploy?
+- Is the pipeline live right now, or am I looking at stale data?
+- How do I keep an incident's findings around after the fix ships?
 
-- **Own the agent (Python or Node/TS)** → install the generated instrumentation starter; calls to OpenAI/Anthropic become traced spans automatically, with optional wrappers for tool calls and sessions.
-- **Don't own the agent** (e.g. `openclaw/openclaw` or any upstream OSS agent) → run the generated LLM proxy bundle (`docker compose up -d`) and point the agent's `OPENAI_API_BASE` at `localhost:4000`. Zero source changes.
+Two ways to feed it data, picked by whether you own the agent code:
 
-What it deliberately **does not** do: rewrite your agent code, ship a full enterprise Kibana suite, auto-enroll Fleet, or pretend to instrument runtimes the OTel SDK doesn't cover.
+- **You own the agent (Python or Node/TS)** — install the generated instrumentation starter and OpenAI/Anthropic calls become traced spans automatically.
+- **You don't own the agent** — run the generated LLM proxy bundle (`docker compose up -d`) and point the agent's `OPENAI_API_BASE` at it. No source changes.
 
 ## Common commands
 
