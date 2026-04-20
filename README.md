@@ -49,6 +49,20 @@ git clone https://github.com/kevin0x5/elasticsearch-agent-observability.git <ski
 
 The repo uses the `SKILL.md + scripts + references` shape so an agent runtime can call a shared observability workflow.
 
+### Avoiding the "embedded git repo" warning
+
+If `<skill-dir>` is itself inside a git-tracked workspace, the clone above drops a nested `.git/` into that workspace and git will flag it as an embedded repo (commit succeeds but only as a gitlink, not file contents).
+
+Pick one:
+
+- **Quickest**: clone with `--depth 1` and add the path to your outer `.gitignore`.
+  ```bash
+  git clone --depth 1 https://github.com/kevin0x5/elasticsearch-agent-observability.git <skill-dir>/elasticsearch-agent-observability
+  echo "<skill-dir>/elasticsearch-agent-observability/" >> .gitignore
+  ```
+- **Clean**: install the skill **outside** your agent workspace and point your agent runtime at the absolute path via its skill config.
+- **Strict**: add it as a `git submodule`. Most verbose, keeps a pinned SHA.
+
 ## Who this is for
 
 - **Agent operators / platform engineers** who own the runtime, deployment environment, or observability stack
@@ -264,6 +278,16 @@ This still stays honest: the repo generates the starter assets and operating con
 - **OTLP HTTP bridge protobuf path**: install `protobuf` and `opentelemetry-proto` only if the sender will post OTLP HTTP protobuf payloads to the generated bridge; OTLP JSON does not need extra packages
 - **Optional auto-patching path**: if the target project wants auto-instrumented OpenAI or Anthropic calls, those SDKs must already exist in the target project
 
+## Extending after bootstrap
+
+Bootstrap delivers Tier 1 observability (latency, error rate, token totals) out of the box. Tool-level, session-level, and per-turn panels stay empty until the agent emits the corresponding `gen_ai.*` fields — that's by design, so empty panels serve as TODO markers.
+
+Three short docs cover the self-extension path, in recommended reading order:
+
+1. [`references/instrumentation_contract.md`](references/instrumentation_contract.md) — the three tiers of fields and what each one unlocks.
+2. [`references/post_bootstrap_playbook.md`](references/post_bootstrap_playbook.md) — ordered checklist for an agent (human or AI) to keep filling the dashboard.
+3. [`references/credentials_playbook.md`](references/credentials_playbook.md) — what to do when bootstrap left credentials on disk and you're moving toward production.
+
 ## Development
 
 Run the test suite with:
@@ -274,10 +298,10 @@ python3 -m unittest discover -s tests
 
 ## Security model
 
-- Credentials stay in environment variables by default
-- Elasticsearch credentials are embedded into generated YAML only when explicitly requested
-- The ingest pipeline redacts sensitive generative AI fields
-- Generated files should still be reviewed before applying them to a live cluster
+- Credentials default to env placeholders; only `--embed-es-credentials` puts them on disk.
+- The ingest pipeline redacts sensitive generative AI fields.
+- For rotation, least-privilege API keys, and post-bootstrap cleanup, see [`references/credentials_playbook.md`](references/credentials_playbook.md).
+- Generated files should still be reviewed before applying them to a live cluster.
 
 ## Contributing
 

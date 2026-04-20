@@ -119,12 +119,24 @@ Ignore generated output, docs, references, tests, and asset bundles when scannin
 - `generate_report.py`
 - `validate_state.py`
 
+## Self-Extension Rule
+
+Bootstrap is the first step, not the finish line. After assets are applied:
+
+1. Follow `references/post_bootstrap_playbook.md` in order. Each checklist item fills a specific empty Kibana panel.
+2. Only emit fields listed in `references/instrumentation_contract.md` or `references/telemetry_schema.md`. Unknown fields do not feed any panel or alert.
+3. If bootstrap left ES credentials in the YAML (for example when an agent took a shortcut to finish end-to-end), rotate and switch to env / API key per `references/credentials_playbook.md` before declaring the setup "production".
+4. When adding a new field that needs a new panel or alert, update all four touchpoints in one PR: `instrumentation_contract.md`, `telemetry_schema.md`, `render_es_assets.py`, `alert_and_diagnose.py`.
+
 ## References
 
 Read these before changing promises or output shape:
 
-- `references/config_guide.md`
-- `references/reporting.md`
-- `references/telemetry_schema.md`
+- `references/instrumentation_contract.md` — tiered field contract; which fields power which panel/alert
+- `references/post_bootstrap_playbook.md` — ordered self-extension checklist
+- `references/credentials_playbook.md` — how to move from "it runs" to "it's safe"
+- `references/config_guide.md` — operational contract (bootstrap flags, dry-run, rollout rules)
+- `references/telemetry_schema.md` — full field dictionary
 - `references/architecture.md`
+- `references/reporting.md`
 - `references/runtime_compat.md`
