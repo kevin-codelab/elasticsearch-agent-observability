@@ -69,6 +69,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apm-server-url", default="")
     parser.add_argument("--agent-id", default="", help="Optional agent identifier for multi-agent setups")
     parser.add_argument("--generate-instrument-snippet", action="store_true", help="Generate a Python auto-instrumentation starter file")
+    parser.add_argument(
+        "--instrument-runtime",
+        choices=["python", "node", "auto"],
+        default="auto",
+        help="Target runtime for the generated instrumentation starter. 'auto' picks Node for TS/JS workspaces.",
+    )
     parser.add_argument("--no-verify-tls", action="store_true", help="Disable TLS certificate verification for ES and Kibana requests")
     parser.add_argument("--kibana-api-key", default="", help="Optional Kibana API key (instead of reusing ES Basic Auth)")
     parser.add_argument("--dry-run", action="store_true", help="Render assets and output the ES/Kibana apply plan without sending requests")
@@ -414,14 +420,19 @@ def main() -> int:
 
         instrument_snippet_path = None
         if args.generate_instrument_snippet:
-            instrument_snippet_path = render_snippet_to_file(
+            snippet_result = render_snippet_to_file(
                 discovery,
                 output_dir / "agent_otel_bootstrap.py",
                 service_name=args.service_name,
                 environment=args.environment,
                 otlp_endpoint=args.otlp_endpoint,
                 index_prefix=index_prefix,
+                runtime=args.instrument_runtime,
             )
+            if isinstance(snippet_result, dict):
+                instrument_snippet_path = snippet_result.get("snippet")
+            else:
+                instrument_snippet_path = snippet_result
 
         apply_summary_path = None
         sanity_check_path = None
