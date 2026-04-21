@@ -190,15 +190,14 @@ def _classify_failure(
     if not send_result.get("ok"):
         code = send_result.get("status_code")
         if code is None:
+            preflight = _local_preflight(
+                otlp_endpoint=otlp_endpoint,
+                collector_log=collector_log,
+            )
             return {
                 "verdict": "transport_unreachable",
-                "next_step": (
-                    f"Cannot reach `{otlp_endpoint}/v1/logs`. "
-                    "Check whether the Collector or the OTLP HTTP bridge is actually listening "
-                    "(`ss -lntp | grep -E '4318|14319'` or `lsof -iTCP -sTCP:LISTEN | grep -E '4318|14319'`). "
-                    "If you are targeting the Collector and it is not up, start it via `run-collector.sh`; "
-                    "if you are targeting the bridge, start it via `run-otlphttpbridge.sh`."
-                ),
+                "next_step": _unreachable_next_step(preflight, otlp_endpoint),
+                "preflight": preflight,
             }
         return {
             "verdict": "transport_rejected",
@@ -265,6 +264,116 @@ def _tail_file(path: Path, n: int) -> str:
         return f"(could not read {path}: {exc})"
 
 
+def _run_cmd(cmd: list[str], timeout: float = 3.0) -> str:
+    """Best-effort command runner. Never raises. Empty string if the tool is absent."""
+    import shutil
+    import subprocess
+
+    if not shutil.which(cmd[0]):
+        return ""
+    try:
+        out = subprocess.run(  # noqa: S603
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return (out.stdout or "") + (out.stderr or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _local_preflight(*, otlp_endpoint: str, collector_log: Path | None) -> dict[str, Any]:
+    """Collect local-host diagnostics when OTLP transport is unreachable.
+
+    All probes are best-effort: missing tools return empty strings; the function
+    never raises. The goal is to let a driving agent see zombie collectors,
+    unlistened ports, or crash logs without having to spawn its own shell.
+    """
+    import re
+
+    # Extract the port the agent is trying to hit (default 4318/14319 if we can't tell).
+    port = ""
+    match = re.search(r":(\d+)(?:/|$)", otlp_endpoint)
+    if match:
+        port = match.group(1)
+    known_ports = sorted({p for p in [port, "4317", "4318", "14319"] if p})
+
+    # ps: look for otelcol-contrib / otelcol / bridge processes and surface zombies.
+    ps_out = _run_cmd(["ps", "-eo", "stat,pid,ppid,comm,args"])
+    otel_lines: list[str] = []
+    zombies: list[str] = []
+    if ps_out:
+        for line in ps_out.splitlines():
+            lowered = line.lower()
+            if "otelcol" in lowered or "otlphttpbridge" in lowered or "opentelemetry" in lowered:
+                otel_lines.append(line.strip())
+                # stat beginning with Z = zombie; Linux defunct entries also match "<defunct>"
+                stat = line.strip().split()[0] if line.strip() else ""
+                if stat.startswith("Z") or "<defunct>" in line:
+                    zombies.append(line.strip())
+
+    # Listening ports: prefer ss, fallback to lsof, then netstat.
+    listen_probe = _run_cmd(["ss", "-lntp"])
+    if not listen_probe:
+        listen_probe = _run_cmd(["lsof", "-iTCP", "-sTCP:LISTEN", "-nP"])
+    if not listen_probe:
+        listen_probe = _run_cmd(["netstat", "-lntp"])
+    listening: dict[str, bool] = {p: False for p in known_ports}
+    if listen_probe:
+        for p in known_ports:
+            # Match :<port> boundary on word end to avoid 43180 vs 4318 ambiguity.
+            pattern = re.compile(rf"[.:]{re.escape(p)}\b")
+            listening[p] = bool(pattern.search(listen_probe))
+
+    log_tail = ""
+    if collector_log and collector_log.exists():
+        log_tail = _tail_file(collector_log, 30)
+
+    return {
+        "otel_processes": otel_lines[:10],
+        "zombie_processes": zombies[:5],
+        "listening_ports": listening,
+        "probed_ports": known_ports,
+        "collector_log_tail": log_tail,
+    }
+
+
+def _unreachable_next_step(preflight: dict[str, Any], otlp_endpoint: str) -> str:
+    zombies = preflight.get("zombie_processes") or []
+    listening = preflight.get("listening_ports") or {}
+    any_listening = any(listening.values())
+    lines: list[str] = [f"Cannot reach `{otlp_endpoint}/v1/logs`."]
+
+    if zombies:
+        lines.append(
+            "Detected zombie/defunct Collector processes: "
+            + "; ".join(zombies[:2])
+            + ". The parent that launched them has exited, so the OTLP listener is gone even though the process table still shows entries. "
+            "Reap and relaunch: `pkill -9 -f otelcol-contrib` then restart with `run-collector.sh` under a proper supervisor (systemd / nohup with disown / a tmux session)."
+        )
+    elif not any_listening:
+        lines.append(
+            "No listener on any of the expected OTLP ports "
+            f"({', '.join(preflight.get('probed_ports', []))}). "
+            "The Collector or bridge simply isn't running. Start it via `run-collector.sh` or `run-otlphttpbridge.sh` and re-verify."
+        )
+    else:
+        live = [p for p, ok in listening.items() if ok]
+        lines.append(
+            f"Ports {live} are listening but `{otlp_endpoint}` is not reachable from here. "
+            "Likely causes: wrong host (127.0.0.1 vs container gateway), wrong port in the agent's `OTEL_EXPORTER_OTLP_ENDPOINT`, or a local firewall. "
+            "Point the agent at a port that is actually listening."
+        )
+
+    tail = preflight.get("collector_log_tail") or ""
+    if tail:
+        lines.append("\nLast 30 lines of Collector log:")
+        lines.append("```\n" + tail + "\n```")
+    return " ".join(lines[:3]) + ("\n\n" + "\n".join(lines[3:]) if len(lines) > 3 else "")
+
+
 def render_text(verdict: dict[str, Any]) -> str:
     status = verdict["verdict"]
     lines = [f"[{status.upper()}] pipeline verify"]
@@ -280,6 +389,15 @@ def render_text(verdict: dict[str, Any]) -> str:
             lines.append(f"  poll:              found on attempt {poll.get('attempt')} in index `{poll.get('index')}`")
         else:
             lines.append(f"  poll:              not found after {poll.get('attempts')} attempts")
+    preflight = verdict.get("preflight")
+    if preflight:
+        listening = preflight.get("listening_ports", {})
+        live = [p for p, ok in listening.items() if ok]
+        dead = [p for p, ok in listening.items() if not ok]
+        lines.append(f"  listening ports:   live={live or '[]'} not-listening={dead or '[]'}")
+        zombies = preflight.get("zombie_processes") or []
+        if zombies:
+            lines.append(f"  zombie collectors: {len(zombies)} (first: {zombies[0][:120]})")
     if verdict.get("next_step"):
         lines.append("")
         lines.append("Next step:")
@@ -326,6 +444,7 @@ def run_verify(args: argparse.Namespace) -> dict[str, Any]:
         "poll": poll,
         "verdict": classification["verdict"],
         "next_step": classification["next_step"],
+        "preflight": classification.get("preflight"),
     }
 
 

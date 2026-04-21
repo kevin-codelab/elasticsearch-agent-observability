@@ -148,6 +148,18 @@ Current contract:
 
 Use this path when you need stable Elasticsearch ingest first and can finish Collector exporter compatibility later.
 
+## Zombie Collector Rule
+
+A common "OTLP silently broken" failure looks like this: `run-collector.sh` was launched under an interactive shell or via `nohup … &` without `disown`, the parent exited, the child was reaped improperly, and the process table shows one or more `[otelcol-contrib] <defunct>` entries. Nothing is listening on `4317` / `4318`, but the launcher return code said `0`, so the agent happily sends telemetry into the void.
+
+`verify_pipeline.py` now detects this: when transport is unreachable it scans `ps` for defunct entries and probes the expected OTLP ports. A non-empty `zombie_processes` list in `verify.json` means the supervisor, not the config, is broken.
+
+How to avoid it:
+
+- Run the Collector under a real supervisor (systemd unit, tmux, `nohup … & disown`, Kubernetes pod, etc) — never a login-shell `&` that dies with the SSH session.
+- When restarting, reap first: `pkill -9 -f otelcol-contrib` before re-launching. Otherwise the zombie entries accumulate and confuse later diagnostics.
+- Keep `collector.log` and `collector.pid` under `generated/<dir>/runtime/`; a launch with neither is not operable.
+
 ## Startup / Stop Rule
 
 A background Collector launch is only acceptable when all of these are true:

@@ -99,7 +99,8 @@ class VerifyPipelineTests(unittest.TestCase):
                 result = verify_pipeline.run_verify(args)
 
         self.assertEqual(result["verdict"], "transport_unreachable")
-        self.assertIn("listening", result["next_step"])
+        self.assertTrue(result["next_step"])
+        self.assertIn("preflight", result)
 
     def test_verdict_transport_rejected_when_http_error(self) -> None:
         args = _make_args()
@@ -143,6 +144,42 @@ class VerifyPipelineTests(unittest.TestCase):
 
         self.assertEqual(result["verdict"], "contract_broken")
         self.assertIn("event.dataset", result["next_step"])
+
+    def test_unreachable_next_step_flags_zombie(self) -> None:
+        pre = {
+            "otel_processes": ["Z 1234 1 otelcol-contrib <defunct>"],
+            "zombie_processes": ["Z 1234 1 otelcol-contrib <defunct>"],
+            "listening_ports": {"4318": False, "14319": False},
+            "probed_ports": ["4318", "14319"],
+            "collector_log_tail": "",
+        }
+        step = verify_pipeline._unreachable_next_step(pre, "http://127.0.0.1:4318")
+        self.assertIn("zombie", step.lower())
+        self.assertIn("pkill", step)
+
+    def test_unreachable_next_step_reports_no_listener(self) -> None:
+        pre = {
+            "otel_processes": [],
+            "zombie_processes": [],
+            "listening_ports": {"4318": False, "14319": False},
+            "probed_ports": ["4318", "14319"],
+            "collector_log_tail": "",
+        }
+        step = verify_pipeline._unreachable_next_step(pre, "http://127.0.0.1:4318")
+        self.assertIn("isn't running", step)
+        self.assertIn("run-collector.sh", step)
+
+    def test_unreachable_next_step_listening_but_unreachable(self) -> None:
+        pre = {
+            "otel_processes": [],
+            "zombie_processes": [],
+            "listening_ports": {"4318": True, "14319": False},
+            "probed_ports": ["4318", "14319"],
+            "collector_log_tail": "",
+        }
+        step = verify_pipeline._unreachable_next_step(pre, "http://container-only-host:4318")
+        self.assertIn("listening", step)
+        self.assertIn("firewall", step)
 
 
 if __name__ == "__main__":
