@@ -61,7 +61,19 @@ python scripts/bootstrap_observability.py \
 
 The run ends with an automatic verify; skip it with `--no-verify` if needed.
 
-### 2. Re-verify on demand
+### 2. Is the pipeline actually live? (use this before trusting anything)
+
+```bash
+python scripts/doctor.py \
+  --es-url <url> --es-user <user> --es-password '<pwd>' \
+  --index-prefix <prefix>
+```
+
+**Why this and not `/healthz`:** the bridge's `/healthz` returns 200 as soon as its HTTP listener is up. It does **not** prove the Collector is alive, that port 4318 is listening, or that real data is reaching ES. We have seen setups where healthz is green, the Collector is `<defunct>`, and agents silently lose telemetry. `doctor.py` runs five independent checks — healthz, process/port state (including zombie detection), real agent data in the last N minutes, and a live OTLP canary — and collapses them into a single honest verdict: `healthy` / `degraded` / `broken` / `unreachable`.
+
+Exit `0` = healthy, `2` = degraded or broken (read per-check `fix` lines), `1` = ES unreachable.
+
+### 3. Re-verify OTLP → ES end to end
 
 ```bash
 python scripts/verify_pipeline.py \
@@ -71,7 +83,7 @@ python scripts/verify_pipeline.py \
 
 Exit `0` = live, `2` = sent but lost / shape wrong (read `next_step`), `1` = transport unreachable.
 
-### 3. Diagnose recent traffic
+### 4. Diagnose recent traffic
 
 ```bash
 python scripts/alert_and_diagnose.py \
@@ -80,14 +92,14 @@ python scripts/alert_and_diagnose.py \
 
 Add `--store-to-insight <path-to-store.py>` to archive RCA conclusions to [`elasticsearch-insight-store`](https://github.com/kevin0x5/elasticsearch-insight-store).
 
-### 4. Detect cluster drift
+### 5. Detect cluster drift
 
 ```bash
 python scripts/validate_state.py \
   --es-url <url> --assets-dir generated/bootstrap/elasticsearch
 ```
 
-### 5. Inspect what is actually deployed
+### 6. Inspect what is actually deployed
 
 ```bash
 python scripts/status.py \
@@ -96,7 +108,7 @@ python scripts/status.py \
 
 Exit `0` = all assets present, `2` = some missing (names are listed), `1` = ES unreachable.
 
-### 6. Tear it all down
+### 7. Tear it all down
 
 ```bash
 # Dry-run first (default): prints the delete plan, touches nothing.
@@ -107,6 +119,16 @@ python scripts/uninstall.py --es-url <url> --index-prefix <prefix> --confirm
 ```
 
 Only assets matching the prefix are removed; 404s are treated as "already gone". Add `--keep-data-stream` when you only want to rerender templates. Pass `--kibana-url` + `--kibana-assets-file generated/bootstrap/elasticsearch/kibana-saved-objects.json` to also remove the dashboards.
+
+### Running the Collector without orphaning it
+
+```bash
+./generated/bootstrap/run-collector.sh --daemon   # survives shell exit
+./generated/bootstrap/run-collector.sh --status   # alive?
+./generated/bootstrap/run-collector.sh --stop     # stop daemon
+```
+
+The default mode (no args) is foreground, which is what `systemd` / `docker` / `tmux` expect. `--daemon` uses `setsid` + `nohup` + a PID file so the Collector does not become `<defunct>` when the shell that launched it exits — the exact failure mode that keeps `/healthz` returning 200 while the data plane is dead. `run-otlphttpbridge.sh` supports the same contract.
 
 ### Optional: zero-code path for an upstream OSS agent
 

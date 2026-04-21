@@ -83,6 +83,14 @@ Default the launcher to `otelcol-contrib`, or document the need for an equivalen
 Do not imply that a minimal core `otelcol` binary is enough.
 If OTLP receive is healthy but the Elasticsearch exporter is the blocked layer, the generated OTLP HTTP bridge fallback is the honest short-term escape hatch for logs/traces.
 
+When launching the Collector from an interactive agent shell, use `run-collector.sh --daemon` (not the bare foreground mode). `--daemon` uses `setsid` + `nohup` + a PID file so the process survives the shell's exit. The default foreground mode is only correct when something else is supervising it (systemd, docker, tmux). Foreground launched from a throwaway shell is how Collectors become `<defunct>` while `/healthz` keeps returning 200.
+
+## Honesty Rule
+
+Never report "observability is done" based on a single `/healthz` call. The bridge's `/healthz` comes up the moment the HTTP listener binds — it does not prove the Collector is alive, that OTLP ports are listening, or that real data is reaching Elasticsearch. The canonical failure mode in the wild: healthz=200, Collector `<defunct>`, port 4318 refused, ES empty, downstream tasks SIGTERM'd.
+
+When asked "is the pipeline working?", run `doctor.py` and report its verdict. `healthy` is the only status that counts as done. `degraded` / `broken` must be reported as such — partial success is worse than visible failure because it lies to every downstream check.
+
 ## Security Rule
 
 Prefer env-placeholder credentials by default.
@@ -119,6 +127,7 @@ Ignore generated output, docs, references, tests, and asset bundles when scannin
 - `generate_report.py`
 - `validate_state.py`
 - `verify_pipeline.py` (post-apply canary + ES poll; auto-runs after `--apply-es-assets`)
+- `doctor.py` (honest five-check diagnostic; use this instead of `/healthz` when reporting pipeline status)
 - `status.py` (reports which assets are currently deployed on the target cluster)
 - `uninstall.py` (dry-run by default; removes only assets that match the prefix)
 
@@ -126,7 +135,7 @@ Ignore generated output, docs, references, tests, and asset bundles when scannin
 
 Bootstrap is the first step, not the finish line. After assets are applied:
 
-1. Trust `verify_pipeline.py` as the source of truth for "the pipeline works". It runs automatically after `--apply-es-assets`; read its `verdict` in `verify.json`. If it is not `ok`, follow the `next_step` it prints — do not move on to instrumentation work until the canary lands.
+1. Trust `doctor.py` (and `verify_pipeline.py` under the hood) as the source of truth for "the pipeline works". `doctor.py` checks healthz, process/port state, recent real data in ES, and a live canary — any single one failing downgrades the verdict below `healthy`. `verify_pipeline.py` still auto-runs after `--apply-es-assets`; read its `verdict` in `verify.json`. If `doctor.py` returns anything other than `healthy`, follow the per-check `fix` lines before declaring the setup done.
 2. First-install default: point the agent at the OTLP HTTP bridge (`http://127.0.0.1:14319`). It's the narrower, more reliable path. Graduate to the native Collector ES exporter once the bridge path is stable; re-run verify when you do.
 3. Follow `references/post_bootstrap_playbook.md` in order. Level 0 is verify; each Level 1 item then fills a specific empty Kibana panel.
 4. Only emit fields listed in `references/instrumentation_contract.md` or `references/telemetry_schema.md`. Unknown fields do not feed any panel or alert.

@@ -191,18 +191,75 @@ def build_runtime_env(
 
 
 def build_collector_run_script(*, collector_bin: str, collector_path: Path, env_path: Path) -> str:
+    """Launcher for the OTel Collector.
+
+    Supports two modes:
+
+    - foreground (default, ``run-collector.sh``): ``exec`` the binary. Good for
+      `systemd`, `docker`, or `tmux` — supervisors expect a foreground child.
+    - daemon (``run-collector.sh --daemon``): ``setsid nohup`` so the process
+      survives the shell that started it. Writes a PID file next to the script
+      and `stop` / `status` subcommands reuse it. This is the fix for the
+      real-world failure mode where an agent spawns the Collector from a
+      throwaway shell, the shell exits, and the Collector becomes
+      ``<defunct>`` — leaving /healthz to lie because the bridge (a different
+      process) is still alive.
+    """
     collector_name = collector_path.name
     env_name = env_path.name
     return "\n".join(
         [
             "#!/usr/bin/env bash",
+            "# Auto-generated launcher for otelcol-contrib.",
+            "# Usage:",
+            "#   ./run-collector.sh            # foreground (default, good for systemd/docker/tmux)",
+            "#   ./run-collector.sh --daemon   # detach from the calling shell; survives shell exit",
+            "#   ./run-collector.sh --stop     # stop a daemonised instance using the PID file",
+            "#   ./run-collector.sh --status   # report whether the daemonised instance is alive",
             "set -euo pipefail",
             'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            f'PIDFILE="$SCRIPT_DIR/.{collector_name}.pid"',
+            f'LOGFILE="$SCRIPT_DIR/runtime/collector.log"',
             "set -a",
             f'source "$SCRIPT_DIR/{env_name}"',
             "set +a",
             f': "${{OTELCOL_BIN:={collector_bin}}}"',
-            f'exec "${{OTELCOL_BIN}}" --config "$SCRIPT_DIR/{collector_name}"',
+            'MODE="${1:-foreground}"',
+            'case "$MODE" in',
+            "  --daemon)",
+            '    mkdir -p "$(dirname "$LOGFILE")"',
+            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
+            '      echo "collector already running (pid $(cat "$PIDFILE")); use --stop first" >&2; exit 1',
+            "    fi",
+            "    # setsid detaches from the controlling terminal; nohup blocks HUP when the parent dies.",
+            "    # Without both, a Collector started from an agent shell becomes <defunct> the moment the shell exits.",
+            f'    ( cd "$SCRIPT_DIR" && setsid nohup "${{OTELCOL_BIN}}" --config "$SCRIPT_DIR/{collector_name}" >>"$LOGFILE" 2>&1 < /dev/null & echo $! >"$PIDFILE" )',
+            "    sleep 0.5",
+            '    if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
+            '      echo "collector daemonised (pid $(cat "$PIDFILE"), log $LOGFILE)"',
+            "    else",
+            '      echo "collector failed to start; see $LOGFILE" >&2',
+            '      rm -f "$PIDFILE"; exit 1',
+            "    fi",
+            "    ;;",
+            "  --stop)",
+            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
+            '      kill "$(cat "$PIDFILE")"; rm -f "$PIDFILE"; echo "collector stopped"',
+            "    else",
+            '      echo "no running collector pidfile" >&2; rm -f "$PIDFILE"; exit 1',
+            "    fi",
+            "    ;;",
+            "  --status)",
+            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
+            '      echo "running (pid $(cat "$PIDFILE"))"',
+            "    else",
+            '      echo "not running"; exit 1',
+            "    fi",
+            "    ;;",
+            "  *)",
+            f'    exec "${{OTELCOL_BIN}}" --config "$SCRIPT_DIR/{collector_name}"',
+            "    ;;",
+            "esac",
             "",
         ]
     )
@@ -226,17 +283,55 @@ def build_bridge_runtime_env(*, service_name: str, environment: str, bridge_endp
 
 
 def build_bridge_run_script(*, bridge_path: Path, env_path: Path) -> str:
+    """Launcher for the OTLP HTTP bridge. Same daemon contract as the Collector launcher."""
     bridge_name = bridge_path.name
     env_name = env_path.name
     return "\n".join(
         [
             "#!/usr/bin/env bash",
+            "# Auto-generated launcher for the OTLP HTTP bridge.",
+            "# Usage mirrors run-collector.sh: foreground | --daemon | --stop | --status.",
             "set -euo pipefail",
             'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            f'PIDFILE="$SCRIPT_DIR/.{bridge_name}.pid"',
+            f'LOGFILE="$SCRIPT_DIR/runtime/bridge.log"',
             "set -a",
             f'source "$SCRIPT_DIR/{env_name}"',
             "set +a",
-            f'exec python3 "$SCRIPT_DIR/{bridge_name}"',
+            'MODE="${1:-foreground}"',
+            'case "$MODE" in',
+            "  --daemon)",
+            '    mkdir -p "$(dirname "$LOGFILE")"',
+            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
+            '      echo "bridge already running (pid $(cat "$PIDFILE")); use --stop first" >&2; exit 1',
+            "    fi",
+            f'    ( cd "$SCRIPT_DIR" && setsid nohup python3 "$SCRIPT_DIR/{bridge_name}" >>"$LOGFILE" 2>&1 < /dev/null & echo $! >"$PIDFILE" )',
+            "    sleep 0.5",
+            '    if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
+            '      echo "bridge daemonised (pid $(cat "$PIDFILE"), log $LOGFILE)"',
+            "    else",
+            '      echo "bridge failed to start; see $LOGFILE" >&2',
+            '      rm -f "$PIDFILE"; exit 1',
+            "    fi",
+            "    ;;",
+            "  --stop)",
+            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
+            '      kill "$(cat "$PIDFILE")"; rm -f "$PIDFILE"; echo "bridge stopped"',
+            "    else",
+            '      echo "no running bridge pidfile" >&2; rm -f "$PIDFILE"; exit 1',
+            "    fi",
+            "    ;;",
+            "  --status)",
+            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
+            '      echo "running (pid $(cat "$PIDFILE"))"',
+            "    else",
+            '      echo "not running"; exit 1',
+            "    fi",
+            "    ;;",
+            "  *)",
+            f'    exec python3 "$SCRIPT_DIR/{bridge_name}"',
+            "    ;;",
+            "esac",
             "",
         ]
     )
