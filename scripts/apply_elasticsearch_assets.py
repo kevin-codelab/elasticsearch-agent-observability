@@ -20,6 +20,7 @@ from common import (
     build_component_template_name,
     build_data_stream_name,
     build_events_alias,
+    build_ssl_context,
     es_request,
     print_error,
     read_json,
@@ -414,12 +415,7 @@ def kibana_request(config: ESConfig, kibana_url: str, method: str, path: str, pa
     body = body_bytes
     if body is None and payload is not None:
         body = json.dumps(payload).encode("utf-8")
-    import ssl
-    context = None
-    if not config.verify_tls:
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = build_ssl_context(config.verify_tls)
     try:
         with urllib.request.urlopen(request, data=body, timeout=config.timeout_seconds, context=context) as response:  # noqa: S310
             text = response.read().decode("utf-8")

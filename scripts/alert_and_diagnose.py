@@ -49,6 +49,10 @@ DEFAULT_ERROR_THRESHOLD = 10
 DEFAULT_P95_LATENCY_THRESHOLD_MS = 5000
 DEFAULT_TOKEN_THRESHOLD_MULTIPLIER = 3.0
 
+# Aggregation queries always carry a server-side timeout so a slow ES query
+# cannot wedge an `alert_and_diagnose` run in a cron slot.
+ES_QUERY_TIMEOUT = "30s"
+
 
 TERM_BUCKET_SIZE = 5
 
@@ -80,6 +84,7 @@ def _query_current_window(config: ESConfig, ds_name: str, time_range: str) -> di
     """Query current window stats."""
     payload = {
         "size": 0,
+        "timeout": ES_QUERY_TIMEOUT,
         "query": {
             "bool": {
                 "filter": [{"range": {"@timestamp": {"gte": time_range}}}],
@@ -157,6 +162,7 @@ def _query_baseline_window(config: ESConfig, ds_name: str, baseline_range: str) 
     lte = parts[1] if len(parts) > 1 else "now"
     payload = {
         "size": 0,
+        "timeout": ES_QUERY_TIMEOUT,
         "query": {
             "bool": {
                 "filter": [{"range": {"@timestamp": {"gte": gte, "lte": lte}}}],

@@ -54,6 +54,20 @@ IDEMPOTENT_METHODS = {"GET", "HEAD", "PUT", "DELETE"}
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
+def build_ssl_context(verify_tls: bool):
+    """Return an ssl.SSLContext with verification disabled when requested, else None.
+
+    Centralised so every HTTP caller (ES, Kibana, verify canary) shares one
+    policy and we don't sprinkle `ssl.CERT_NONE` across modules.
+    """
+    if verify_tls:
+        return None
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -164,6 +178,35 @@ def build_component_template_name(index_prefix: str, component: str) -> str:
     return f"{index_prefix}-{component}"
 
 
+def build_index_template_name(index_prefix: str) -> str:
+    return f"{index_prefix}-events-template"
+
+
+def build_ingest_pipeline_name(index_prefix: str) -> str:
+    return f"{index_prefix}-normalize"
+
+
+def build_ilm_policy_name(index_prefix: str) -> str:
+    return f"{index_prefix}-lifecycle"
+
+
+def asset_names(index_prefix: str) -> dict[str, str]:
+    """Return the canonical ES asset names for a given index prefix.
+
+    Centralising the naming contract lets uninstall/status scripts stay in sync
+    with apply without copy-pasting string templates.
+    """
+    return {
+        "index_template": build_index_template_name(index_prefix),
+        "ingest_pipeline": build_ingest_pipeline_name(index_prefix),
+        "ilm_policy": build_ilm_policy_name(index_prefix),
+        "component_template_ecs_base": build_component_template_name(index_prefix, "ecs-base"),
+        "component_template_settings": build_component_template_name(index_prefix, "settings"),
+        "data_stream": build_data_stream_name(index_prefix),
+        "events_alias": build_events_alias(index_prefix),
+    }
+
+
 def iter_text_files(workspace: Path, max_files: int = 400, max_bytes: int = 200_000) -> list[Path]:
     discovered: list[Path] = []
     for path in workspace.rglob("*"):
@@ -202,11 +245,7 @@ def es_request(config: ESConfig, method: str, path: str, payload: dict | None = 
     url = config.es_url.rstrip("/") + path
     upper_method = method.upper()
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    context = None
-    if not config.verify_tls:
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = build_ssl_context(config.verify_tls)
 
     attempts = max(1, config.max_retries + 1)
     last_exc: Exception | None = None

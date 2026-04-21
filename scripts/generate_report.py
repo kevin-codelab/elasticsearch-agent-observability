@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
 def search_payload(time_range: str, time_field: str = "@timestamp") -> dict[str, Any]:
     return {
         "size": 0,
+        "timeout": "30s",
         "query": {
             "bool": {
                 "filter": [{"range": {time_field: {"gte": time_range}}}],

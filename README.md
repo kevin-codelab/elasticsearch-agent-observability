@@ -87,6 +87,27 @@ python scripts/validate_state.py \
   --es-url <url> --assets-dir generated/bootstrap/elasticsearch
 ```
 
+### 5. Inspect what is actually deployed
+
+```bash
+python scripts/status.py \
+  --es-url <url> --index-prefix <prefix>
+```
+
+Exit `0` = all assets present, `2` = some missing (names are listed), `1` = ES unreachable.
+
+### 6. Tear it all down
+
+```bash
+# Dry-run first (default): prints the delete plan, touches nothing.
+python scripts/uninstall.py --es-url <url> --index-prefix <prefix>
+
+# Actually delete:
+python scripts/uninstall.py --es-url <url> --index-prefix <prefix> --confirm
+```
+
+Only assets matching the prefix are removed; 404s are treated as "already gone". Add `--keep-data-stream` when you only want to rerender templates. Pass `--kibana-url` + `--kibana-assets-file generated/bootstrap/elasticsearch/kibana-saved-objects.json` to also remove the dashboards.
+
 ### Optional: zero-code path for an upstream OSS agent
 
 ```bash

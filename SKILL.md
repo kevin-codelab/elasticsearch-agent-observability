@@ -119,6 +119,8 @@ Ignore generated output, docs, references, tests, and asset bundles when scannin
 - `generate_report.py`
 - `validate_state.py`
 - `verify_pipeline.py` (post-apply canary + ES poll; auto-runs after `--apply-es-assets`)
+- `status.py` (reports which assets are currently deployed on the target cluster)
+- `uninstall.py` (dry-run by default; removes only assets that match the prefix)
 
 ## Self-Extension Rule
 
