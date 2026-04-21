@@ -53,6 +53,8 @@ from typing import Any
 from common import (
     ESConfig,
     SkillError,
+    BRIDGE_OTLP_PORTS,
+    COLLECTOR_OTLP_PORTS,
     build_data_stream_name,
     build_ssl_context,
     emit_skill_audit,
@@ -67,6 +69,11 @@ from verify_pipeline import _local_preflight, run_verify as verify_run
 DEFAULT_FRESHNESS_MINUTES = 10
 DEFAULT_HEALTHZ_URL = "http://127.0.0.1:14319/healthz"
 DEFAULT_OTLP_HTTP_ENDPOINT = "http://127.0.0.1:14319"
+
+# Aliases kept so existing in-module references read naturally. These point
+# at the shared constants in common.py — do not redefine.
+BRIDGE_PATH_PORTS = BRIDGE_OTLP_PORTS
+COLLECTOR_PATH_PORTS = COLLECTOR_OTLP_PORTS
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,16 +142,57 @@ def _probe_healthz(healthz_url: str, *, verify_tls: bool) -> dict[str, Any]:
         return {"status": "fail", "detail": f"cannot reach {healthz_url}: {exc.reason}"}
 
 
+def _classify_paths(listening: dict[str, bool]) -> dict[str, dict[str, Any]]:
+    """Split port-listen info into the two data paths.
+
+    Returned shape:
+
+        {
+          "bridge":    {"status": "up"|"down", "listening_ports": {"14319": bool}},
+          "collector": {"status": "up"|"down"|"partial", "listening_ports": {"4317": bool, "4318": bool}},
+        }
+
+    A path is ``up`` when every port it owns is listening, ``down`` when none
+    are, ``partial`` when some are (collector only — bridge has one port).
+    """
+    def _slice(ports: tuple[str, ...]) -> dict[str, bool]:
+        return {p: bool(listening.get(p, False)) for p in ports}
+
+    bridge_slice = _slice(BRIDGE_PATH_PORTS)
+    collector_slice = _slice(COLLECTOR_PATH_PORTS)
+    bridge_up = all(bridge_slice.values())
+    col_ups = sum(1 for v in collector_slice.values() if v)
+    if col_ups == 0:
+        collector_status = "down"
+    elif col_ups < len(collector_slice):
+        collector_status = "partial"
+    else:
+        collector_status = "up"
+    return {
+        "bridge": {
+            "status": "up" if bridge_up else "down",
+            "listening_ports": bridge_slice,
+        },
+        "collector": {
+            "status": collector_status,
+            "listening_ports": collector_slice,
+        },
+    }
+
+
 def _probe_processes_and_ports(otlp_endpoint: str, collector_log: str) -> dict[str, Any]:
-    """Wraps verify_pipeline._local_preflight. Fails loudly on zombies."""
+    """Wraps verify_pipeline._local_preflight. Splits port info into the two
+    known data paths (bridge vs. collector) so callers can tell a
+    half-working pipeline from a fully broken one."""
     from pathlib import Path as _Path
 
     log_path = _Path(collector_log).expanduser().resolve() if collector_log else None
     preflight = _local_preflight(otlp_endpoint=otlp_endpoint, collector_log=log_path)
     zombies = preflight.get("zombie_processes") or []
     listening = preflight.get("listening_ports") or {}
-    any_listening = any(listening.values())
+    paths = _classify_paths(listening)
 
+    # Zombies are the worst case — they make healthz lie. Always loud.
     if zombies:
         return {
             "status": "fail",
@@ -155,9 +203,15 @@ def _probe_processes_and_ports(otlp_endpoint: str, collector_log: str) -> dict[s
             ),
             "zombies": zombies,
             "listening_ports": listening,
+            "paths": paths,
             "fix": "Reap: `pkill -9 -f otelcol-contrib` then relaunch via `run-collector.sh --daemon`.",
         }
-    if not any_listening:
+
+    bridge_up = paths["bridge"]["status"] == "up"
+    collector_state = paths["collector"]["status"]
+
+    # Case A: nobody listening anywhere.
+    if not bridge_up and collector_state == "down":
         return {
             "status": "fail",
             "detail": (
@@ -165,16 +219,64 @@ def _probe_processes_and_ports(otlp_endpoint: str, collector_log: str) -> dict[s
                 "Collector/bridge are not running."
             ),
             "listening_ports": listening,
+            "paths": paths,
             "fix": "Start via `run-collector.sh --daemon` or `run-otlphttpbridge.sh --daemon`.",
         }
-    partial = [p for p, ok in listening.items() if not ok]
-    if partial:
+
+    # Case B: bridge is up but collector is not. This is the common "bridge
+    # path ok, collector path dead" state users keep reporting. We classify
+    # it as ``warn`` so the aggregator can report `degraded_collector_path`
+    # instead of calling the whole thing broken — the fallback IS working.
+    if bridge_up and collector_state != "up":
+        missing_ports = [p for p, ok in paths["collector"]["listening_ports"].items() if not ok]
         return {
             "status": "warn",
-            "detail": f"Only some OTLP ports are listening. Missing: {partial}",
+            "detail": (
+                f"Bridge path is listening on {BRIDGE_PATH_PORTS[0]} but the Collector path is "
+                f"{collector_state} (missing: {missing_ports}). Agents can still ship logs/traces "
+                f"via the bridge; the standard Collector OTLP receiver has not recovered."
+            ),
             "listening_ports": listening,
+            "paths": paths,
+            "fix": (
+                "If the Collector is expected to run: inspect its log, reap any defunct process, "
+                "and relaunch with `run-collector.sh --daemon`. If bridge-only is the target "
+                "state, this warning is cosmetic."
+            ),
         }
-    return {"status": "pass", "detail": "Processes alive and all probed OTLP ports listening", "listening_ports": listening}
+
+    # Case C: collector is up but bridge is not. Standard path working, no
+    # fallback safety net — still warn because a healthy setup has both.
+    if not bridge_up and collector_state == "up":
+        return {
+            "status": "warn",
+            "detail": (
+                f"Collector path is listening on {COLLECTOR_PATH_PORTS} but the bridge fallback on "
+                f"{BRIDGE_PATH_PORTS[0]} is not. If the Collector exporter stalls, you have no "
+                "second path. Start the bridge with `run-otlphttpbridge.sh --daemon`."
+            ),
+            "listening_ports": listening,
+            "paths": paths,
+        }
+
+    # Case D: collector partial (one of 4317/4318 missing) — agents using the
+    # missing protocol will fail.
+    if collector_state == "partial":
+        missing_ports = [p for p, ok in paths["collector"]["listening_ports"].items() if not ok]
+        return {
+            "status": "warn",
+            "detail": f"Collector path is partially listening. Missing: {missing_ports}",
+            "listening_ports": listening,
+            "paths": paths,
+        }
+
+    # Case E: everything up.
+    return {
+        "status": "pass",
+        "detail": "Processes alive; bridge and Collector paths both listening.",
+        "listening_ports": listening,
+        "paths": paths,
+    }
 
 
 def _probe_recent_data(config: ESConfig, *, index_prefix: str, freshness_minutes: int) -> dict[str, Any]:
@@ -269,14 +371,17 @@ def _probe_canary(args: argparse.Namespace) -> dict[str, Any]:
 def _aggregate(checks: dict[str, dict[str, Any]]) -> str:
     """Collapse individual check statuses into a single honest verdict.
 
-    Rules:
-    - Any ``fail`` in the data plane (processes_and_ports, recent_data, canary)
-      -> ``broken`` (even if healthz is 200 — this is the whole point).
-    - healthz=pass but data plane failing -> ``broken`` with explicit lie warning.
-    - Any ``warn`` and no fail -> ``degraded``.
-    - All ``pass`` -> ``healthy``.
-    - healthz fail AND processes fail AND ES reachable -> ``broken``.
-    - ES unreachable -> ``unreachable``.
+    Verdicts:
+
+    - ``healthy``                — all checks pass
+    - ``broken``                 — data plane is dead; agent is losing telemetry now
+    - ``degraded_collector_path``— bridge path works + data is flowing, but the
+                                   Collector 4317/4318 listeners are down.
+                                   Fallback is live; standard path needs repair.
+                                   This is the *specific* state users keep hitting
+                                   and conflating with generic ``degraded``.
+    - ``degraded``               — any other combination of warn statuses
+    - ``unreachable``            — ES itself cannot be queried
     """
     statuses = {name: ch.get("status") for name, ch in checks.items()}
 
@@ -287,6 +392,25 @@ def _aggregate(checks: dict[str, dict[str, Any]]) -> str:
     data_plane = [statuses.get("processes_and_ports"), statuses.get("recent_data"), statuses.get("canary")]
     if "fail" in data_plane:
         return "broken"
+
+    # Specific state: bridge is the only live path. Identified by the paths
+    # substructure we added to processes_and_ports. Treat this as its own
+    # verdict because the operational response differs: "standard path is
+    # broken but the fallback is saving you" is not the same advice as
+    # "some random warning exists somewhere".
+    paths = (checks.get("processes_and_ports", {}) or {}).get("paths") or {}
+    bridge_status = (paths.get("bridge") or {}).get("status")
+    collector_status = (paths.get("collector") or {}).get("status")
+    data_healthy = statuses.get("recent_data") == "pass"
+    canary_ok = statuses.get("canary") in {"pass", "skipped"}
+    if (
+        bridge_status == "up"
+        and collector_status in {"down", "partial"}
+        and data_healthy
+        and canary_ok
+    ):
+        return "degraded_collector_path"
+
     if any(s == "warn" for s in statuses.values()):
         return "degraded"
     if all(s in {"pass", "skipped"} for s in statuses.values()):
@@ -337,6 +461,20 @@ def run_doctor(args: argparse.Namespace) -> dict[str, Any]:
             f"{lie_warning}"
             " See per-check detail for fix."
         )
+    elif verdict == "degraded_collector_path":
+        ds_name = build_data_stream_name(index_prefix)
+        doc_count = checks["recent_data"].get("doc_count", 0)
+        paths = (checks.get("processes_and_ports", {}) or {}).get("paths") or {}
+        collector_state = (paths.get("collector") or {}).get("status", "unknown")
+        missing_ports = [
+            p for p, ok in ((paths.get("collector") or {}).get("listening_ports") or {}).items() if not ok
+        ]
+        summary = (
+            f"Pipeline is USABLE via the OTLP HTTP bridge; canary landed in `{ds_name}` and "
+            f"{doc_count} real document(s) arrived in the last {args.freshness_minutes} minutes. "
+            f"Collector OTLP receiver is {collector_state} (missing ports: {missing_ports or 'none'}). "
+            "Fallback path is live; the standard Collector path needs repair for a fully compliant setup."
+        )
     elif verdict == "degraded":
         degraded = [name for name, ch in checks.items() if ch.get("status") in {"warn", "fail"}]
         summary = f"Pipeline is degraded ({', '.join(degraded)}). Partial functionality only."
@@ -358,7 +496,13 @@ def run_doctor(args: argparse.Namespace) -> dict[str, Any]:
 
 def render_text(result: dict[str, Any]) -> str:
     icons = {"pass": "✓", "warn": "!", "fail": "✗", "skipped": "–"}
-    verdict_icons = {"healthy": "✓", "degraded": "!", "broken": "✗", "unreachable": "?"}
+    verdict_icons = {
+        "healthy": "✓",
+        "degraded": "!",
+        "degraded_collector_path": "!",
+        "broken": "✗",
+        "unreachable": "?",
+    }
     lines = [
         f"[{verdict_icons.get(result['verdict'], '?')} {result['verdict'].upper()}] {result['summary']}",
         "",
@@ -416,7 +560,7 @@ def main() -> int:
         verdict = result["verdict"]
         if verdict == "healthy":
             return 0
-        if verdict in {"degraded", "broken"}:
+        if verdict in {"degraded", "degraded_collector_path", "broken"}:
             return 2
         return 1
     except SkillError as exc:

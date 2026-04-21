@@ -74,9 +74,15 @@ python scripts/doctor.py \
   --index-prefix <prefix>
 ```
 
-**Why this and not `/healthz`:** the bridge's `/healthz` returns 200 as soon as its HTTP listener is up. It does **not** prove the Collector is alive, that port 4318 is listening, or that real data is reaching ES. We have seen setups where healthz is green, the Collector is `<defunct>`, and agents silently lose telemetry. `doctor.py` runs five independent checks — healthz, process/port state (including zombie detection), real agent data in the last N minutes, and a live OTLP canary — and collapses them into a single honest verdict: `healthy` / `degraded` / `broken` / `unreachable`.
+**Why this and not `/healthz`:** the bridge's `/healthz` returns 200 as soon as its HTTP listener is up. It does **not** prove the Collector is alive, that port 4318 is listening, or that real data is reaching ES. We have seen setups where healthz is green, the Collector is `<defunct>`, and agents silently lose telemetry. `doctor.py` runs four independent checks — healthz, process/port state (split into bridge and Collector paths, with zombie detection), real agent data in the last N minutes, and a live OTLP canary — and collapses them into an honest verdict:
 
-Exit `0` = healthy, `2` = degraded or broken (read per-check `fix` lines), `1` = ES unreachable.
+- `healthy` — all paths up, real data flowing, canary landed
+- `degraded_collector_path` — **the common half-failure**: bridge is live and agents are still writing to ES via it, but the Collector's 4317/4318 receiver is down. The fallback is saving you; the standard path needs repair.
+- `degraded` — any other combination of warnings
+- `broken` — the data plane is dead (healthz may still lie about it)
+- `unreachable` — ES itself is down
+
+Exit `0` = healthy, `2` = any degraded or broken state (read per-check `fix` lines), `1` = ES unreachable.
 
 ### 3. Re-verify OTLP → ES end to end
 

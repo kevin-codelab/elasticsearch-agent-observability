@@ -253,6 +253,14 @@ TESTED_MAX_MAJOR = 9
 # can tell ours apart from a foreign resource that happens to share the name.
 OBSERVER_PRODUCT_TAG = "elasticsearch-agent-observability"
 
+# Known OTLP ports for our two data paths. Shared by verify_pipeline (to
+# probe listener liveness) and doctor (to classify which path is up). The
+# Collector's gRPC and HTTP receivers live on 4317/4318 by OTel default;
+# the generated OTLP HTTP bridge binds to 14319 by the bootstrap contract.
+COLLECTOR_OTLP_PORTS: tuple[str, ...] = ("4317", "4318")
+BRIDGE_OTLP_PORTS: tuple[str, ...] = ("14319",)
+KNOWN_OTLP_PORTS: tuple[str, ...] = COLLECTOR_OTLP_PORTS + BRIDGE_OTLP_PORTS
+
 # Dataset tag used by skill self-audit events. Shares the `internal.*`
 # namespace with sanity_check / pipeline_verify / alert_check so alerting
 # and report aggregations already filter it out.

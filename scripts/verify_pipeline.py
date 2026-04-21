@@ -42,6 +42,7 @@ from typing import Any
 
 from common import (
     ESConfig,
+    KNOWN_OTLP_PORTS,
     SkillError,
     build_data_stream_name,
     es_request,
@@ -298,7 +299,7 @@ def _local_preflight(*, otlp_endpoint: str, collector_log: Path | None) -> dict[
     match = re.search(r":(\d+)(?:/|$)", otlp_endpoint)
     if match:
         port = match.group(1)
-    known_ports = sorted({p for p in [port, "4317", "4318", "14319"] if p})
+    known_ports = sorted({p for p in [port, *KNOWN_OTLP_PORTS] if p})
 
     # ps: look for otelcol-contrib / otelcol / bridge processes and surface zombies.
     ps_out = _run_cmd(["ps", "-eo", "stat,pid,ppid,comm,args"])

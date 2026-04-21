@@ -89,7 +89,12 @@ When launching the Collector from an interactive agent shell, use `run-collector
 
 Never report "observability is done" based on a single `/healthz` call. The bridge's `/healthz` comes up the moment the HTTP listener binds — it does not prove the Collector is alive, that OTLP ports are listening, or that real data is reaching Elasticsearch. The canonical failure mode in the wild: healthz=200, Collector `<defunct>`, port 4318 refused, ES empty, downstream tasks SIGTERM'd.
 
-When asked "is the pipeline working?", run `doctor.py` and report its verdict. `healthy` is the only status that counts as done. `degraded` / `broken` must be reported as such — partial success is worse than visible failure because it lies to every downstream check.
+When asked "is the pipeline working?", run `doctor.py` and report its verdict. `healthy` is the only status that counts as done. Any other verdict must be reported verbatim, not softened:
+
+- `degraded_collector_path` is the specific "bridge ok, Collector dead" state — agents are still shipping data via the fallback, but the standard OTLP receiver is broken. Do not round this up to "done" just because data is flowing.
+- `degraded` / `broken` / `unreachable` mean the pipeline is not trustworthy end-to-end; partial success is worse than visible failure because it lies to every downstream check.
+
+If the downstream consumer only understands `healthy/degraded/broken/unreachable`, treat `degraded_collector_path` as `degraded` — but never as `healthy`.
 
 ## Security Rule
 

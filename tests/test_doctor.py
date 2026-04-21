@@ -35,6 +35,101 @@ def _args(**overrides) -> argparse.Namespace:
 
 
 class DoctorTests(unittest.TestCase):
+    # ----- the "bridge ok, collector dead" case from the field ------------
+
+    def test_bridge_up_collector_down_with_real_data_is_degraded_collector_path(self) -> None:
+        """Real-world case: Collector is <defunct>, but bridge is handling traffic.
+
+        The important bit is that this verdict is SPECIFIC, not a generic
+        ``degraded``. Operators need a one-liner that says "the fallback is
+        saving you, fix the standard path" — not "something is warn".
+        """
+        fake_proc = {
+            "status": "warn",
+            "detail": "Bridge path listening, Collector path down.",
+            "paths": {
+                "bridge": {"status": "up", "listening_ports": {"14319": True}},
+                "collector": {"status": "down", "listening_ports": {"4317": False, "4318": False}},
+            },
+        }
+        fake_recent = {
+            "status": "pass",
+            "detail": "real agent data flowing",
+            "doc_count": 42,
+        }
+        fake_canary = {"status": "pass", "detail": "canary landed"}
+        with mock.patch.object(doctor, "_probe_healthz", return_value={"status": "pass", "detail": "ok"}):
+            with mock.patch.object(doctor, "_probe_processes_and_ports", return_value=fake_proc):
+                with mock.patch.object(doctor, "_probe_recent_data", return_value=fake_recent):
+                    with mock.patch.object(doctor, "_probe_canary", return_value=fake_canary):
+                        result = doctor.run_doctor(_args(skip_canary=False))
+
+        self.assertEqual(result["verdict"], "degraded_collector_path")
+        # Summary must name the specific fault, not just "partial".
+        summary = result["summary"].lower()
+        self.assertIn("bridge", summary)
+        self.assertIn("collector", summary)
+        self.assertIn("fallback", summary)
+
+    def test_collector_up_bridge_down_is_generic_degraded(self) -> None:
+        """Opposite half-state: standard path works but no fallback. Still warn,
+        but NOT the specific 'bridge saved you' verdict — since bridge isn't."""
+        fake_proc = {
+            "status": "warn",
+            "detail": "Collector up, bridge down.",
+            "paths": {
+                "bridge": {"status": "down", "listening_ports": {"14319": False}},
+                "collector": {"status": "up", "listening_ports": {"4317": True, "4318": True}},
+            },
+        }
+        fake_recent = {"status": "pass", "detail": "data flowing", "doc_count": 10}
+        with mock.patch.object(doctor, "_probe_healthz", return_value={"status": "pass", "detail": "ok"}):
+            with mock.patch.object(doctor, "_probe_processes_and_ports", return_value=fake_proc):
+                with mock.patch.object(doctor, "_probe_recent_data", return_value=fake_recent):
+                    with mock.patch.object(doctor, "_probe_canary", return_value={"status": "pass", "detail": "ok"}):
+                        result = doctor.run_doctor(_args(skip_canary=False))
+        self.assertEqual(result["verdict"], "degraded")
+
+    def test_bridge_up_collector_down_but_no_data_is_still_degraded_generic(self) -> None:
+        """If data isn't actually flowing, we don't claim bridge is saving us."""
+        fake_proc = {
+            "status": "warn",
+            "detail": "Bridge up, collector down",
+            "paths": {
+                "bridge": {"status": "up", "listening_ports": {"14319": True}},
+                "collector": {"status": "down", "listening_ports": {"4317": False, "4318": False}},
+            },
+        }
+        fake_recent = {"status": "fail", "detail": "no docs", "doc_count": 0}
+        with mock.patch.object(doctor, "_probe_healthz", return_value={"status": "pass", "detail": "ok"}):
+            with mock.patch.object(doctor, "_probe_processes_and_ports", return_value=fake_proc):
+                with mock.patch.object(doctor, "_probe_recent_data", return_value=fake_recent):
+                    with mock.patch.object(doctor, "_probe_canary", return_value={"status": "skipped", "detail": "skip"}):
+                        result = doctor.run_doctor(_args(skip_canary=True))
+        # recent_data fail => broken, not degraded_collector_path.
+        self.assertEqual(result["verdict"], "broken")
+
+    # ----- path classifier unit tests -------------------------------------
+
+    def test_classify_paths_bridge_only(self) -> None:
+        paths = doctor._classify_paths({"4317": False, "4318": False, "14319": True})
+        self.assertEqual(paths["bridge"]["status"], "up")
+        self.assertEqual(paths["collector"]["status"], "down")
+
+    def test_classify_paths_collector_partial(self) -> None:
+        paths = doctor._classify_paths({"4317": True, "4318": False, "14319": True})
+        self.assertEqual(paths["collector"]["status"], "partial")
+
+    def test_classify_paths_both_up(self) -> None:
+        paths = doctor._classify_paths({"4317": True, "4318": True, "14319": True})
+        self.assertEqual(paths["bridge"]["status"], "up")
+        self.assertEqual(paths["collector"]["status"], "up")
+
+    def test_classify_paths_all_down(self) -> None:
+        paths = doctor._classify_paths({})
+        self.assertEqual(paths["bridge"]["status"], "down")
+        self.assertEqual(paths["collector"]["status"], "down")
+
     # ----- the central lie-detection case ---------------------------------
 
     def test_healthz_ok_but_data_plane_dead_is_broken(self) -> None:
