@@ -56,7 +56,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grpc-port", type=int, default=4317)
     parser.add_argument("--http-port", type=int, default=4318)
     parser.add_argument("--telemetry-metrics-port", type=int, default=8888)
-    parser.add_argument("--sampling-ratio", type=float, default=1.0, help="Probabilistic sampling ratio (0.0 to 1.0)")
+    parser.add_argument("--sampling-ratio", type=float, default=1.0, help="Probabilistic trace sampling ratio (0.0 to 1.0)")
+    parser.add_argument("--send-queue-size", type=int, default=2048, help="Elasticsearch exporter sending queue size")
+    parser.add_argument("--retry-initial-interval", default="1s", help="Collector exporter retry initial interval")
+    parser.add_argument("--retry-max-interval", default="30s", help="Collector exporter retry max interval")
     parser.add_argument("--enable-filelog", action="store_true", help="Add filelog receiver for local agent log files")
     parser.add_argument("--filelog-path", default="/var/log/agent/*.log")
     return parser.parse_args()
@@ -80,11 +83,18 @@ def render_config(
     http_port: int = 4318,
     telemetry_metrics_port: int = 8888,
     sampling_ratio: float = 1.0,
+    send_queue_size: int = 2048,
+    retry_initial_interval: str = "1s",
+    retry_max_interval: str = "30s",
     enable_filelog: bool = False,
     filelog_path: str = "/var/log/agent/*.log",
 ) -> str:
     validated_prefix = validate_index_prefix(index_prefix)
     credentials = validate_credential_pair(es_user, es_password)
+    if not 0.0 <= sampling_ratio <= 1.0:
+        raise SkillError(f"Sampling ratio must be between 0.0 and 1.0, got: {sampling_ratio}")
+    if send_queue_size < 1:
+        raise SkillError(f"Send queue size must be >= 1, got: {send_queue_size}")
     modules = ",".join(module["module_kind"] for module in discovery.get("detected_modules", [])[:12]) or "unknown"
     resource_actions = "\n".join(
         [
@@ -140,6 +150,16 @@ def render_config(
     sampling_percentage: {sampling_ratio * 100:.1f}
 """
         sampling_processor_ref = ", probabilistic_sampler"
+
+    exporter_resilience_block = f"""
+    sending_queue:
+      enabled: true
+      queue_size: {send_queue_size}
+    retry_on_failure:
+      enabled: true
+      initial_interval: {retry_initial_interval}
+      max_interval: {retry_max_interval}
+      max_elapsed_time: 300s"""
 
     spanmetrics_dimensions = "\n".join(
         f"      - name: {dimension}" for dimension in _normalize_spanmetrics_dimensions()
@@ -200,12 +220,12 @@ exporters:
     logs_index: {_yaml_scalar(events_alias)}
     traces_index: {_yaml_scalar(events_alias)}
     mapping:
-      allowed_modes: [ecs]
+      allowed_modes: [ecs]{exporter_resilience_block}
   elasticsearch/metrics:
     endpoints: [{_yaml_scalar(es_url)}]{auth_lines}
     metrics_index: {_yaml_scalar(metrics_index)}
     mapping:
-      allowed_modes: [ecs]
+      allowed_modes: [ecs]{exporter_resilience_block}
 
 service:
   telemetry:
@@ -245,6 +265,9 @@ def main() -> int:
             http_port=args.http_port,
             telemetry_metrics_port=args.telemetry_metrics_port,
             sampling_ratio=args.sampling_ratio,
+            send_queue_size=args.send_queue_size,
+            retry_initial_interval=args.retry_initial_interval,
+            retry_max_interval=args.retry_max_interval,
             enable_filelog=args.enable_filelog,
             filelog_path=args.filelog_path,
         )

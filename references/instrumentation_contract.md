@@ -59,6 +59,7 @@ The agent has to wrap its own call sites. The Python or Node instrumentation bun
 1. **Don't invent field names.** If a field isn't listed here or in `telemetry_schema.md`, the dashboard doesn't consume it, and adding it silently doesn't help. Propose it via a PR that also updates a panel.
 2. **Don't fake Tier 2.** Writing `gen_ai.tool.name = "unknown"` for every span defeats the dashboard. Leave the field unset if you don't know it.
 3. **Internal events are tagged with `event.dataset`.** `internal.sanity_check` and `internal.alert_check` are filtered out of every baseline query so they never skew rates. If you emit your own internal events, follow the same convention.
+4. **Don't smuggle new root fields through `message`.** Unknown top-level JSON keys from structured `message` parsing are routed to `labels.unmapped`; if a field matters operationally, promote it into the explicit schema first.
 
 ## Reading order for an agent doing self-extension
 

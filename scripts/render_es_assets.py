@@ -94,6 +94,8 @@ def _ecs_base_properties() -> dict[str, Any]:
         # --- labels ---
         "labels.recommended_modules": {"type": "keyword"},
         "labels.ingest_mode": {"type": "keyword"},
+        "labels.unmapped": {"type": "flattened"},
+        "labels.payload_truncated": {"type": "boolean"},
         # --- gen_ai (OpenTelemetry GenAI Semantic Conventions v1.40+) ---
         "gen_ai.system": {"type": "keyword"},
         "gen_ai.request.model": {"type": "keyword"},
@@ -143,10 +145,8 @@ def build_component_template_ecs_base(index_prefix: str) -> dict[str, Any]:
     return {
         "template": {
             "mappings": {
-                "dynamic": "true",
-                "dynamic_templates": [
-                    {"strings_as_keywords": {"match_mapping_type": "string", "mapping": {"type": "keyword", "ignore_above": 1024}}}
-                ],
+                "dynamic": "false",
+                "dynamic_templates": [],
                 "properties": _ecs_base_properties(),
             },
         },
@@ -236,7 +236,7 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
             {
                 "script": {
                     "lang": "painless",
-                    "source": "if (ctx._parsed_message instanceof Map) { for (entry in ctx._parsed_message.entrySet()) { if (!ctx.containsKey(entry.getKey())) ctx[entry.getKey()] = entry.getValue(); } } ctx.remove('_parsed_message');",
+                    "source": "def known_roots = new HashSet(['@timestamp', 'message', 'event', 'service', 'agent', 'trace', 'span', 'parent', 'transaction', 'observer', 'host', 'labels', 'gen_ai', 'error', 'log']); void routeUnknown(Map target, String key, def value) { target.labels = target.labels ?: new HashMap(); target.labels.unmapped = target.labels.unmapped ?: new HashMap(); target.labels.unmapped[key] = value; } void mergeMaps(Map target, Map incoming) { for (entry in incoming.entrySet()) { def key = entry.getKey(); def incomingValue = entry.getValue(); if (!(key instanceof String)) { continue; } if (key.contains('.')) { if (!target.containsKey(key) || target[key] == null) { target[key] = incomingValue; } continue; } if (!known_roots.contains(key)) { routeUnknown(target, key, incomingValue); continue; } if (!target.containsKey(key) || target[key] == null) { target[key] = incomingValue; continue; } def existingValue = target[key]; if (existingValue instanceof Map && incomingValue instanceof Map) { mergeMaps((Map) existingValue, (Map) incomingValue); } } } if (ctx._parsed_message instanceof Map) { mergeMaps(ctx, (Map) ctx._parsed_message); } ctx.remove('_parsed_message');",
                     "ignore_failure": True,
                 }
             },

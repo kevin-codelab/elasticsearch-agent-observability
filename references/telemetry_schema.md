@@ -81,6 +81,12 @@ These fields extend OTel GenAI Semantic Conventions for agent runtime observabil
 Do **not** rely on flat legacy fields such as `agent_id`, `tool_name`, `token_input`, or `captured_at`.
 Do **not** use pre-v2 field names like `gen_ai.agent.tool_name` or `gen_ai.agent.session_id` — they have been replaced by OTel standard equivalents.
 
+## Mapping boundary rule
+
+The generated Elasticsearch component template is now **root-dynamic = false**.
+If a structured `message` JSON payload contains unknown **top-level** objects, the ingest pipeline routes them into `labels.unmapped` instead of creating new root mappings.
+Known ECS / OTel fields should still be emitted explicitly as canonical fields rather than hidden inside `message`.
+
 ## Time field
 
 The canonical and default reporting time field is `@timestamp`.

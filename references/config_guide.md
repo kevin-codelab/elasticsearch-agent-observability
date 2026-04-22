@@ -100,6 +100,22 @@ For the generated bundle in this repo:
 
 That means the first file to inspect is `otel-collector.generated.yaml`, specifically the `exporters.elasticsearch/*` blocks.
 
+## Collector Governance Rule
+
+The bootstrap path now exposes the main Collector write-governance knobs directly:
+
+- `--sampling-ratio` — probabilistic **trace** sampling ratio for the generated Collector path
+- `--send-queue-size` — Elasticsearch exporter sending queue size
+- `--retry-initial-interval` / `--retry-max-interval` — retry backoff window for exporter failures
+
+These knobs are rendered into the generated `exporters.elasticsearch/*` blocks as `sending_queue` and `retry_on_failure` settings. Logs remain full-fidelity; the sampling knob only affects the trace pipeline.
+
+## Mapping Boundary Rule
+
+The generated ECS base component template is intentionally `dynamic: false` at the root.
+When the ingest pipeline parses structured JSON from `message`, unknown top-level objects are stored under `labels.unmapped` instead of expanding the index mapping.
+If a new field deserves first-class query support, add it to the schema and dashboard/report contract explicitly.
+
 ## Verify Rule
 
 Every apply run should be followed by `verify_pipeline.py`. `bootstrap_observability.py` does this automatically when `--apply-es-assets` is on unless `--no-verify` is passed.

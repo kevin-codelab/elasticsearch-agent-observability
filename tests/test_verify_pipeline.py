@@ -145,6 +145,36 @@ class VerifyPipelineTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "contract_broken")
         self.assertIn("event.dataset", result["next_step"])
 
+    def test_contract_broken_message_uses_full_pipeline_name_for_hyphenated_prefix(self) -> None:
+        args = _make_args(index_prefix="agent-obsv-prod")
+
+        def fake_send(endpoint, payload, timeout=10):
+            return {"ok": True, "status_code": 200, "url": endpoint + "/v1/logs"}
+
+        def fake_es_request(config, method, path, payload=None):
+            canary_id = payload["query"]["term"]["gen_ai.agent_ext.verify_id"]
+            return {
+                "hits": {
+                    "hits": [
+                        {
+                            "_index": "agent-obsv-prod-events-000001",
+                            "_id": "doc-y",
+                            "_source": {
+                                "gen_ai.agent_ext.verify_id": canary_id,
+                            },
+                        }
+                    ]
+                }
+            }
+
+        with mock.patch.object(verify_pipeline, "_send_canary", side_effect=fake_send):
+            with mock.patch.object(verify_pipeline, "es_request", side_effect=fake_es_request):
+                result = verify_pipeline.run_verify(args)
+
+        self.assertEqual(result["verdict"], "contract_broken")
+        self.assertIn("`agent-obsv-prod-normalize`", result["next_step"])
+        self.assertNotIn("`agent-normalize`", result["next_step"])
+
     def test_unreachable_next_step_flags_zombie(self) -> None:
         pre = {
             "otel_processes": ["Z 1234 1 otelcol-contrib <defunct>"],

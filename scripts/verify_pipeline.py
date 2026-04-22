@@ -45,6 +45,7 @@ from common import (
     KNOWN_OTLP_PORTS,
     SkillError,
     build_data_stream_name,
+    build_ingest_pipeline_name,
     es_request,
     print_error,
     print_info,
@@ -185,6 +186,7 @@ def _classify_failure(
     poll_result: dict[str, Any],
     otlp_endpoint: str,
     ds_name: str,
+    pipeline_name: str,
     collector_log: Path | None,
 ) -> dict[str, Any]:
     """Turn a mixed send+poll outcome into a single actionable next step."""
@@ -229,7 +231,7 @@ def _classify_failure(
                 f"{', '.join(missing)}. "
                 "This means the ingest pipeline is not applying the ECS field shape. "
                 "Re-run `bootstrap_observability.py --apply-es-assets` to refresh the pipeline, "
-                f"then verify the ingest pipeline named `{ds_name.split('-')[0]}-normalize` exists "
+                f"then verify the ingest pipeline named `{pipeline_name}` exists "
                 "and is referenced by the index template."
             ),
         }
@@ -472,6 +474,7 @@ def run_verify(
         poll_result=poll,
         otlp_endpoint=otlp_http_endpoint,
         ds_name=ds_name,
+        pipeline_name=build_ingest_pipeline_name(resolved_prefix),
         collector_log=Path(collector_log).expanduser().resolve() if collector_log else None,
     )
     return {

@@ -12,6 +12,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import apply_elasticsearch_assets  # noqa: E402
 import bootstrap_observability  # noqa: E402
+import render_es_assets  # noqa: E402
 import render_otlp_http_bridge  # noqa: E402
 from common import ESConfig  # noqa: E402
 
@@ -378,6 +379,37 @@ class ApplyAndBootstrapTests(unittest.TestCase):
         paths = [step["path"] for step in summary["plan"]]
         self.assertIn("/api/status", paths)
         self.assertIn("/api/fleet/agent_policies?page=1&perPage=1", paths)
+
+    def test_verify_exit_code_matches_verify_verdict(self) -> None:
+        self.assertEqual(bootstrap_observability._verify_exit_code({"verdict": "ok"}), 0)
+        self.assertEqual(bootstrap_observability._verify_exit_code({"verdict": "contract_broken"}), 2)
+        self.assertEqual(bootstrap_observability._verify_exit_code({"verdict": "sent_but_lost"}), 2)
+        self.assertEqual(bootstrap_observability._verify_exit_code({"verdict": "transport_rejected"}), 1)
+        self.assertEqual(bootstrap_observability._verify_exit_code(None, "boom"), 1)
+
+    def test_instrument_snippet_runtime_label_tracks_generated_bundle_type(self) -> None:
+        self.assertEqual(
+            bootstrap_observability._instrument_snippet_runtime_label(Path("/tmp/node-instrumentation/agent-otel-bootstrap.mjs")),
+            "Node.js / TypeScript",
+        )
+        self.assertEqual(
+            bootstrap_observability._instrument_snippet_runtime_label(Path("/tmp/agent_otel_bootstrap.py")),
+            "Python",
+        )
+
+    def test_ingest_pipeline_merges_nested_message_maps_without_overwriting_existing_objects(self) -> None:
+        pipeline = render_es_assets.build_ingest_pipeline(["runtime_entrypoint"])
+        merge_processor = next(
+            processor["script"]
+            for processor in pipeline["processors"]
+            if "script" in processor and "_parsed_message" in processor["script"].get("source", "")
+        )
+        merge_script = merge_processor["source"]
+
+        self.assertIn("void mergeMaps(Map target, Map incoming)", merge_script)
+        self.assertIn("existingValue instanceof Map && incomingValue instanceof Map", merge_script)
+        self.assertIn("mergeMaps(ctx, (Map) ctx._parsed_message)", merge_script)
+        self.assertNotIn("if (!ctx.containsKey(entry.getKey())) ctx[entry.getKey()] = entry.getValue();", merge_script)
 
 
 if __name__ == "__main__":

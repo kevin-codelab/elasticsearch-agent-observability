@@ -40,6 +40,31 @@ DEFAULT_BRIDGE_BIND_HOST = "127.0.0.1"
 DEFAULT_BRIDGE_HTTP_PORT = 14319
 
 
+def _verify_exit_code(verify_result: dict[str, Any] | None, verify_error: str | None = None) -> int:
+    if verify_error:
+        return 1
+    if not verify_result:
+        return 0
+    verdict = str(verify_result.get("verdict", "")).strip().lower()
+    if verdict == "ok":
+        return 0
+    if verdict in {"contract_broken", "sent_but_lost"}:
+        return 2
+    return 1
+
+
+def _instrument_snippet_runtime_label(path: Path) -> str:
+    if path.suffix.lower() in {".mjs", ".cjs", ".js", ".ts", ".tsx"}:
+        return "Node.js / TypeScript"
+    return "Python"
+
+
+def _validate_sampling_ratio(value: float) -> float:
+    if not 0.0 <= value <= 1.0:
+        raise SkillError(f"Sampling ratio must be between 0.0 and 1.0, got: {value}")
+    return value
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bootstrap agent observability")
     parser.add_argument("--workspace", required=True)
@@ -64,6 +89,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--otlp-endpoint", default=DEFAULT_OTLP_ENDPOINT)
     parser.add_argument("--collector-bin", default=DEFAULT_COLLECTOR_BIN)
     parser.add_argument("--telemetry-metrics-port", type=int, default=8888, help="Collector self-telemetry Prometheus port")
+    parser.add_argument("--sampling-ratio", type=float, default=1.0, help="Probabilistic trace sampling ratio for the generated Collector path")
+    parser.add_argument("--send-queue-size", type=int, default=2048, help="Collector Elasticsearch exporter sending queue size")
+    parser.add_argument("--retry-initial-interval", default="1s", help="Collector exporter retry initial interval")
+    parser.add_argument("--retry-max-interval", default="30s", help="Collector exporter retry max interval")
     parser.add_argument("--bridge-bind-host", default=DEFAULT_BRIDGE_BIND_HOST, help="OTLP HTTP bridge fallback bind host")
     parser.add_argument("--bridge-http-port", type=int, default=DEFAULT_BRIDGE_HTTP_PORT, help="OTLP HTTP bridge fallback port")
     parser.add_argument("--ingest-mode", choices=SUPPORTED_INGEST_MODES, default=DEFAULT_INGEST_MODE)
@@ -117,6 +146,10 @@ def collect_summary_notes(
     ingest_mode: str,
     bridge_bind_host: str,
     bridge_http_port: int,
+    sampling_ratio: float = 1.0,
+    send_queue_size: int = 2048,
+    retry_initial_interval: str = "1s",
+    retry_max_interval: str = "30s",
     apply_kibana_assets: bool = False,
     has_elastic_native_bundle: bool = False,
     dry_run: bool = False,
@@ -150,6 +183,9 @@ def collect_summary_notes(
             f"The generated Elasticsearch exporters statically route `logs_index` and `traces_index` to the `{index_prefix}-events` alias, and `metrics_index` to `{index_prefix}-metrics`."
         )
         notes.append("The generated Collector config forces `elastic.mapping.mode=ecs` and restricts `mapping.allowed_modes` to `ecs` so exporter output stays aligned with the ECS-first Elasticsearch assets and report queries.")
+        notes.append(
+            f"Collector governance defaults: trace sampling ratio `{sampling_ratio:g}`, exporter sending queue `{send_queue_size}`, retry window `{retry_initial_interval}` → `{retry_max_interval}`. Logs remain full-fidelity; the sampling knob only affects the trace pipeline."
+        )
         notes.append("If a debug Collector proves OTLP receive is healthy but Elasticsearch stays empty, inspect the `exporters.elasticsearch/*` block first; the remaining failure domain is Collector → Elasticsearch exporter.")
         notes.append(
             f"An OTLP HTTP bridge fallback is also generated at `http://{bridge_bind_host}:{bridge_http_port}` for `logs` and `traces`; use it when the Collector exporter path is blocked, and keep metrics on the Collector path."
@@ -526,6 +562,8 @@ def main() -> int:
         index_prefix = validate_index_prefix(args.index_prefix)
         retention_days = validate_positive_int(args.retention_days, "Retention days")
         max_files = validate_positive_int(args.max_files, "Max files")
+        sampling_ratio = _validate_sampling_ratio(float(args.sampling_ratio))
+        send_queue_size = validate_positive_int(args.send_queue_size, "Send queue size")
         bridge_http_port = validate_positive_int(args.bridge_http_port, "Bridge HTTP port")
         bridge_bind_host = args.bridge_bind_host.strip() or DEFAULT_BRIDGE_BIND_HOST
         credentials = validate_credential_pair(args.es_user, args.es_password)
@@ -562,6 +600,10 @@ def main() -> int:
                 es_password=credentials[1] if credentials else "",
                 embed_credentials=args.embed_es_credentials,
                 telemetry_metrics_port=args.telemetry_metrics_port,
+                sampling_ratio=sampling_ratio,
+                send_queue_size=send_queue_size,
+                retry_initial_interval=args.retry_initial_interval,
+                retry_max_interval=args.retry_max_interval,
             )
             write_text(collector_path, collector_text)
             env_path = output_dir / "agent-otel.env"
@@ -698,6 +740,7 @@ def main() -> int:
 
         verify_result: dict[str, Any] | None = None
         verify_path: Path | None = None
+        verify_error: str | None = None
 
         # Persist the runtime bind info so doctor / verify can honour
         # non-default ports without having to be told. Previously doctor's
@@ -738,7 +781,8 @@ def main() -> int:
                 print()
                 print(render_verify_text(verify_result))
             except Exception as exc:  # noqa: BLE001
-                print(f"   ⚠️  verify step crashed: {exc}")
+                verify_error = str(exc)
+                print(f"   ⚠️  verify step crashed: {verify_error}")
 
         report_output_arg = args.report_output
         if not report_output_arg and args.apply_es_assets and not args.dry_run:
@@ -761,6 +805,10 @@ def main() -> int:
             ingest_mode=args.ingest_mode,
             bridge_bind_host=bridge_bind_host,
             bridge_http_port=bridge_http_port,
+            sampling_ratio=sampling_ratio,
+            send_queue_size=send_queue_size,
+            retry_initial_interval=args.retry_initial_interval,
+            retry_max_interval=args.retry_max_interval,
             apply_kibana_assets=args.apply_kibana_assets,
             has_elastic_native_bundle=bool(native_assets_paths),
             dry_run=args.dry_run,
@@ -809,7 +857,10 @@ def main() -> int:
         if bridge_run_path and bridge_env_path:
             notes.append("Use `run-otlphttpbridge.sh` plus `agent-otel-bridge.env` when you need a logs/traces-only fallback that bypasses the Collector Elasticsearch exporter.")
         if instrument_snippet_path:
-            notes.append("`agent_otel_bootstrap.py` is a starter snippet for Python runtimes; you still need to import or wire it into the actual agent entrypoint.")
+            snippet_runtime_label = _instrument_snippet_runtime_label(instrument_snippet_path)
+            notes.append(
+                f"`{instrument_snippet_path.name}` is a starter snippet for {snippet_runtime_label} runtimes; you still need to import or wire it into the actual agent entrypoint."
+            )
         if llm_proxy_paths:
             notes.append(
                 f"The `llm-proxy/` bundle provides a zero-code path for upstream OSS agents: run `docker compose up -d` in that directory and point the agent at `http://localhost:{args.llm_proxy_port}/v1`. See `llm-proxy/README.md`."
@@ -826,6 +877,10 @@ def main() -> int:
                 notes.append(
                     f"End-to-end verify returned `{verdict}`. See `verify.json` for the canary details and the actionable next step; do not declare the pipeline production-ready until this comes back `ok`."
                 )
+        elif verify_error:
+            notes.append(
+                f"End-to-end verify crashed before producing a verdict: {verify_error}. Treat this bootstrap run as incomplete until verify succeeds."
+            )
         notes.append(
             f"Use `alert_and_diagnose.py --es-url {args.es_url} --index-prefix {index_prefix} --time-range now-15m` to run alert checks with root-cause analysis. "
             "Add `--write-to-es` to persist alert history, `--generate-crontab` for scheduling, or `--webhook-url` for push notifications."
@@ -854,7 +909,13 @@ def main() -> int:
             ),
         )
 
-        print(f"✅ bootstrap complete: {output_dir}")
+        final_exit_code = _verify_exit_code(verify_result, verify_error)
+        if final_exit_code == 0:
+            print(f"✅ bootstrap complete: {output_dir}")
+        elif verify_result is not None:
+            print(f"⚠️  bootstrap finished with verify verdict `{verify_result.get('verdict', 'unknown')}`: {output_dir}")
+        else:
+            print(f"⚠️  bootstrap finished with verify error: {output_dir}")
         print(f"   discovery: {discovery_path}")
         if collector_path:
             print(f"   collector: {collector_path}")
@@ -876,7 +937,7 @@ def main() -> int:
         if report_output_path:
             print(f"   smoke report: {report_output_path}")
         print(f"   summary: {summary_path}")
-        return 0
+        return final_exit_code
     except SkillError as exc:
         print_error(str(exc))
         return 1
