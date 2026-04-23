@@ -54,6 +54,7 @@ The agent has to wrap its own call sites. The Python or Node instrumentation bun
 | `gen_ai.guardrail.*` | safety dashboards (see `telemetry_schema.md`) |
 | `gen_ai.evaluation.*` | regression dashboards; populated by `evaluate.py run --write-to-es` |
 | `gen_ai.agent_ext.reasoning.*` | reasoning trace panels; decision replay in trace timeline |
+| `gen_ai.feedback.*` | user feedback panels; quality signal from end users (bridge `POST /v1/feedback`) |
 
 ## Rules
 

@@ -88,6 +88,17 @@ Record **why** the agent chose a particular action at each decision point. These
 - `gen_ai.agent_ext.reasoning.decision_type` — `routing` / `tool_selection` / `delegation` / `termination` / `retry`
 - `gen_ai.agent_ext.reasoning.step_index` — ordinal within the turn (0-based)
 
+## User feedback fields
+
+Collect end-user feedback and link it to traces/sessions. The bridge exposes `POST /v1/feedback` to accept feedback; the generated instrumentation snippet does NOT handle this — it's the product team's responsibility to wire their UI.
+
+- `gen_ai.feedback.score` — numeric score (e.g. 1–5, or -1/0/1 for thumbs up/down)
+- `gen_ai.feedback.sentiment` — `positive` / `negative` / `neutral` (auto-derived from score if omitted)
+- `gen_ai.feedback.comment` — free-text user comment
+- `gen_ai.feedback.trace_id` — links feedback to a specific `trace.id`
+- `gen_ai.feedback.session_id` — links feedback to a `gen_ai.conversation.id`
+- `gen_ai.feedback.user_id` — opaque end-user identifier
+
 ## Important rule
 
 Do **not** rely on flat legacy fields such as `agent_id`, `tool_name`, `token_input`, or `captured_at`.

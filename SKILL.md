@@ -69,6 +69,9 @@ Current repo capabilities are best described as:
 - ECS / GenAI-native ingest contract with no legacy flat-field remap
 - reasoning trace schema (`gen_ai.agent_ext.reasoning.*`) for recording agent decision rationale, alternatives, and confidence at each step; the trace timeline view in Kibana shows decision-by-decision replay
 - lightweight evaluation runner (`evaluate.py`) with 6 built-in regression evaluators (latency, error rate, token efficiency, cost, tool coverage, guardrail block rate); writes `gen_ai.evaluation.*` events to ES so the dashboard panels and alert engine can detect regressions
+- LLM-as-Judge evaluator (`evaluate.py --evaluators llm_judge --llm-judge-endpoint <url>`): samples recent traces from ES, sends to any OpenAI-compatible API for quality scoring; does NOT host the LLM
+- user feedback collection (`gen_ai.feedback.*`): the OTLP HTTP bridge exposes `POST /v1/feedback` to accept thumbs-up/down, numeric scores, and free-text comments linked to specific traces/sessions; two Kibana panels show sentiment distribution and score trend
+- session replay (`replay.py`): reconstructs a nested span tree from ES trace data for a given session or trace ID; outputs text-tree or JSON; includes reasoning trace and feedback at each decision point
 - all features target the Basic (free) Elasticsearch license
 
 Do not claim that the repo already:
@@ -133,7 +136,8 @@ Ignore generated output, docs, references, tests, and asset bundles when scannin
 - `render_llm_proxy_starter.py` (zero-code path for upstream OSS agents)
 - `instrument_frameworks.py` (auto-patch AutoGen, CrewAI, LangGraph, OpenAI Agents SDK)
 - `model_pricing.py` (built-in price table, cost summary, cost backfill)
-- `evaluate.py` (lightweight regression evaluator: latency / error rate / token / cost / tool coverage / guardrail)
+- `evaluate.py` (lightweight regression evaluator: latency / error rate / token / cost / tool coverage / guardrail + LLM-as-Judge)
+- `replay.py` (session replay: nested span tree from ES traces with reasoning trace and feedback)
 - `alert_and_diagnose.py` (supports `--alert-rules` JSON config, `--webhook-template slack|dingtalk|feishu|wecom`)
 - `apply_elasticsearch_assets.py`
 - `generate_report.py`

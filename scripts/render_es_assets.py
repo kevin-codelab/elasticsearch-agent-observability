@@ -150,6 +150,13 @@ def _ecs_base_properties() -> dict[str, Any]:
         "gen_ai.agent_ext.reasoning.input_summary": {"type": "text"},     # condensed input context (NOT the raw prompt)
         "gen_ai.agent_ext.reasoning.decision_type": {"type": "keyword"},  # routing / tool_selection / delegation / termination / retry
         "gen_ai.agent_ext.reasoning.step_index": {"type": "integer"},     # ordinal within the turn (0-based)
+        # --- user feedback ---
+        "gen_ai.feedback.score": {"type": "float"},           # numeric score (e.g. 1-5, or -1/0/1 for thumbs)
+        "gen_ai.feedback.sentiment": {"type": "keyword"},     # positive / negative / neutral
+        "gen_ai.feedback.comment": {"type": "text"},          # free-text user comment
+        "gen_ai.feedback.trace_id": {"type": "keyword"},      # trace.id this feedback is about
+        "gen_ai.feedback.session_id": {"type": "keyword"},    # gen_ai.conversation.id this feedback is about
+        "gen_ai.feedback.user_id": {"type": "keyword"},       # end-user identifier (opaque)
     }
 
 
@@ -630,6 +637,9 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
     # Reasoning trace panels
     lens_reasoning_actions_id = f"{index_prefix}-lens-reasoning-actions"
     lens_reasoning_decision_types_id = f"{index_prefix}-lens-reasoning-decision-types"
+    # User feedback panels
+    lens_feedback_sentiment_id = f"{index_prefix}-lens-feedback-sentiment"
+    lens_feedback_score_id = f"{index_prefix}-lens-feedback-score"
 
     objects: list[dict[str, Any]] = [
         {
@@ -802,6 +812,39 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
         ),
     )
 
+    # User feedback panels
+    objects.append(
+        _build_terms_pie_visualization(
+            object_id=lens_feedback_sentiment_id, data_view_id=data_view_id,
+            title="User feedback sentiment",
+            description="Distribution of user feedback: positive / negative / neutral.",
+            source_field="gen_ai.feedback.sentiment", metric_label="Feedback",
+            query="gen_ai.feedback.sentiment:*",
+        ),
+    )
+    feedback_score_state = _build_lens_state(
+        columns={
+            "col-x": {"operationType": "date_histogram", "sourceField": "@timestamp", "params": {"interval": "auto"}},
+            "col-avg": {"operationType": "average", "sourceField": "gen_ai.feedback.score", "label": "Avg feedback score"},
+        },
+        column_order=["col-x", "col-avg"],
+        visualization={
+            "legend": {"isVisible": True, "position": "right"},
+            "preferredSeriesType": "line",
+            "layers": [{"layerId": DEFAULT_LENS_LAYER_ID, "xAccessor": "col-x", "accessors": ["col-avg"]}],
+        },
+    )
+    objects.append(
+        build_lens_saved_object(
+            object_id=lens_feedback_score_id,
+            title="Feedback score over time",
+            description="Average user feedback score over time. Track quality trends.",
+            visualization_type="lnsXY",
+            state=feedback_score_state,
+            data_view_id=data_view_id,
+        ),
+    )
+
     dashboard_panels = [
         {"id": lens_event_rate_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_latency_id, "type": "lens", "width": "24", "height": "12"},
@@ -819,6 +862,8 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
         {"id": lens_eval_dimensions_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_reasoning_actions_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_reasoning_decision_types_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_feedback_sentiment_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_feedback_score_id, "type": "lens", "width": "24", "height": "12"},
         {"id": session_search_id, "type": "search", "width": "24", "height": "15"},
         {"id": trace_timeline_id, "type": "search", "width": "24", "height": "15"},
         {"id": saved_search_id, "type": "search", "width": "24", "height": "15"},
@@ -907,6 +952,8 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
                 lens_cost_over_time_id,
                 lens_reasoning_actions_id,
                 lens_reasoning_decision_types_id,
+                lens_feedback_sentiment_id,
+                lens_feedback_score_id,
             ] + extra_lens_ids,
             "events_alias_pattern": f"{ds_name}*",
             "object_count": len(objects),

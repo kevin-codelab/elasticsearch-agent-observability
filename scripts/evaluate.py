@@ -73,6 +73,10 @@ EVALUATORS: dict[str, dict[str, str]] = {
         "description": "Fraction of guardrail checks that resulted in block/redact",
         "dimension": "safety",
     },
+    "llm_judge": {
+        "description": "LLM-as-Judge: sample recent traces and score response quality via an OpenAI-compatible API",
+        "dimension": "quality",
+    },
 }
 
 
@@ -267,6 +271,118 @@ def _eval_guardrail_block_rate(current: dict, baseline: dict) -> dict[str, Any]:
     return {"outcome": outcome, "score": round(1 - rate, 2), "detail": f"Guardrail block rate: {rate:.1%} ({blocked}/{total})"}
 
 
+def _eval_llm_judge(current: dict, baseline: dict, *, config: ESConfig | None = None, index_prefix: str = "", time_range: str = "", llm_endpoint: str = "", llm_model: str = "", llm_api_key: str = "") -> dict[str, Any]:
+    """LLM-as-Judge: sample recent traces from ES, send to an OpenAI-compatible
+    API for quality scoring.
+
+    Requires --llm-judge-endpoint (any OpenAI-compatible /v1/chat/completions).
+    We do NOT host the LLM — the user provides the endpoint.
+    """
+    if not llm_endpoint:
+        return {"outcome": "pass", "score": 1.0, "detail": "Skipped: --llm-judge-endpoint not provided"}
+    if not config or not index_prefix:
+        return {"outcome": "pass", "score": 1.0, "detail": "Skipped: ES config not available for LLM judge"}
+
+    # Sample recent traces with messages
+    ds_name = f"{build_data_stream_name(index_prefix)}*"
+    try:
+        sample = es_request(config, "POST", f"/{ds_name}/_search", {
+            "size": 5,
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"range": {"@timestamp": {"gte": time_range or "now-1h"}}},
+                        {"exists": {"field": "message"}},
+                    ],
+                    "must_not": [{"prefix": {"event.dataset": "internal."}}],
+                }
+            },
+            "sort": [{"@timestamp": "desc"}],
+            "_source": ["message", "gen_ai.tool.name", "gen_ai.request.model", "event.outcome", "gen_ai.conversation.id"],
+        })
+    except SkillError as exc:
+        return {"outcome": "fail", "score": 0.0, "detail": f"Cannot query ES for samples: {exc}"}
+
+    hits = (sample.get("hits") or {}).get("hits", [])
+    if not hits:
+        return {"outcome": "pass", "score": 1.0, "detail": "No recent traces with messages to judge"}
+
+    # Build the judge prompt
+    trace_summaries = []
+    for h in hits[:5]:
+        src = h.get("_source", {})
+        msg = str(src.get("message", ""))[:500]
+        tool = src.get("gen_ai.tool.name", "")
+        model = src.get("gen_ai.request.model", "")
+        outcome = src.get("event.outcome", "")
+        trace_summaries.append(f"- [{outcome}] tool={tool} model={model}: {msg}")
+
+    judge_prompt = (
+        "You are evaluating an AI agent's recent behavior. "
+        "Score the overall quality from 0 to 10 based on:\n"
+        "1. Are the responses/actions appropriate?\n"
+        "2. Are there obvious errors or failures?\n"
+        "3. Is the agent efficient (not retrying excessively)?\n\n"
+        "Recent trace samples:\n" + "\n".join(trace_summaries) + "\n\n"
+        "Respond with ONLY a JSON object: {\"score\": <0-10>, \"rationale\": \"<brief explanation>\"}"
+    )
+
+    # Call the LLM endpoint
+    import urllib.request
+    import urllib.error
+    model_name = llm_model or "gpt-4o-mini"
+    body = json.dumps({
+        "model": model_name,
+        "messages": [{"role": "user", "content": judge_prompt}],
+        "temperature": 0,
+        "max_tokens": 200,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        llm_endpoint.rstrip("/") + "/v1/chat/completions" if "/v1/" not in llm_endpoint else llm_endpoint,
+        data=body,
+        method="POST",
+    )
+    req.add_header("Content-Type", "application/json")
+    if llm_api_key:
+        req.add_header("Authorization", f"Bearer {llm_api_key}")
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+            result = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+        return {"outcome": "fail", "score": 0.0, "detail": f"LLM judge call failed: {exc}"}
+
+    # Parse response
+    try:
+        content = result["choices"][0]["message"]["content"]
+        # Try to parse JSON from the response
+        parsed = json.loads(content)
+        llm_score = float(parsed.get("score", 5))
+        rationale = str(parsed.get("rationale", ""))
+    except (KeyError, IndexError, json.JSONDecodeError, ValueError):
+        # Fallback: try to extract a number
+        content = str(result.get("choices", [{}])[0].get("message", {}).get("content", ""))
+        import re
+        numbers = re.findall(r"\b(\d+(?:\.\d+)?)\b", content)
+        llm_score = float(numbers[0]) if numbers else 5.0
+        rationale = content[:200]
+
+    normalized = round(llm_score / 10, 2)
+    if normalized < 0.4:
+        outcome = "fail"
+    elif normalized < 0.7:
+        outcome = "degraded"
+    else:
+        outcome = "pass"
+
+    return {
+        "outcome": outcome,
+        "score": normalized,
+        "detail": f"LLM judge score: {llm_score}/10 ({model_name}). {rationale}",
+    }
+
+
 _EVAL_FUNCTIONS = {
     "latency_regression": _eval_latency_regression,
     "error_rate_regression": _eval_error_rate_regression,
@@ -274,6 +390,7 @@ _EVAL_FUNCTIONS = {
     "cost_regression": _eval_cost_regression,
     "tool_coverage": _eval_tool_coverage,
     "guardrail_block_rate": _eval_guardrail_block_rate,
+    "llm_judge": _eval_llm_judge,
 }
 
 
@@ -289,6 +406,9 @@ def run_evaluation(
     baseline_range: str = "now-7d/now-1h",
     evaluators: list[str] | None = None,
     write_to_es: bool = False,
+    llm_judge_endpoint: str = "",
+    llm_judge_model: str = "",
+    llm_judge_api_key: str = "",
 ) -> dict[str, Any]:
     """Run selected evaluators and return structured results."""
     ds_name = build_data_stream_name(index_prefix)
@@ -311,7 +431,10 @@ def run_evaluation(
             continue
         meta = EVALUATORS.get(name, {})
         try:
-            result = fn(current, baseline)
+            if name == "llm_judge":
+                result = fn(current, baseline, config=config, index_prefix=index_prefix, time_range=time_range, llm_endpoint=llm_judge_endpoint, llm_model=llm_judge_model, llm_api_key=llm_judge_api_key)
+            else:
+                result = fn(current, baseline)
         except Exception as exc:  # noqa: BLE001
             result = {"outcome": "fail", "score": 0.0, "detail": f"Evaluator crashed: {exc}"}
         results.append({
@@ -407,6 +530,9 @@ def parse_args() -> argparse.Namespace:
     run_p.add_argument("--evaluators", default="", help="Comma-separated evaluator names (default: all)")
     run_p.add_argument("--write-to-es", action="store_true", help="Write results to ES")
     run_p.add_argument("--output-format", choices=["text", "json"], default="text")
+    run_p.add_argument("--llm-judge-endpoint", default="", help="OpenAI-compatible API endpoint for LLM-as-Judge (e.g. http://localhost:4000)")
+    run_p.add_argument("--llm-judge-model", default="gpt-4o-mini", help="Model name for LLM judge")
+    run_p.add_argument("--llm-judge-api-key", default="", help="API key for the LLM judge endpoint")
 
     sub.add_parser("list", help="List available evaluators")
 
@@ -439,6 +565,9 @@ def main() -> int:
                 baseline_range=args.baseline_range,
                 evaluators=evaluators,
                 write_to_es=args.write_to_es,
+                llm_judge_endpoint=args.llm_judge_endpoint,
+                llm_judge_model=args.llm_judge_model,
+                llm_judge_api_key=args.llm_judge_api_key,
             )
             if args.output_format == "json":
                 print(json.dumps(report, ensure_ascii=False, indent=2))

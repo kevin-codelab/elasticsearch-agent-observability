@@ -367,6 +367,9 @@ class OTLPBridgeHandler(BaseHTTPRequestHandler):
         if route == "/v1/metrics":
             self._write_json(501, {{"error": "bridge fallback only supports logs and traces; keep metrics on the Collector path."}})
             return
+        if route == "/v1/feedback":
+            self._handle_feedback()
+            return
         if route not in {{"/v1/logs", "/v1/traces"}}:
             self._write_json(404, {{"error": "not found"}})
             return
@@ -392,6 +395,78 @@ class OTLPBridgeHandler(BaseHTTPRequestHandler):
             )
         except ValueError as exc:
             self._write_json(400, {{"error": str(exc)}})
+        except Exception as exc:  # noqa: BLE001
+            self._write_json(500, {{"error": str(exc)}})
+
+    def _handle_feedback(self) -> None:
+        \"\"\"Accept user feedback and write it to the events data stream.
+
+        POST /v1/feedback
+        Content-Type: application/json
+
+        {{
+          "score": 1,                        // numeric: 1-5, or -1/0/1 for thumbs
+          "sentiment": "positive",           // positive / negative / neutral (optional, auto-derived from score)
+          "comment": "Great answer!",        // optional free-text
+          "trace_id": "abc123",              // optional — links feedback to a specific trace
+          "session_id": "sess-456",          // optional — links feedback to a conversation
+          "user_id": "user-789"              // optional — opaque end-user id
+        }}
+        \"\"\"
+        content_length = int(self.headers.get("Content-Length", "0") or "0")
+        if content_length > 1_000_000:
+            self._write_json(413, {{"error": "payload too large"}})
+            return
+        body = self.rfile.read(content_length)
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self._write_json(400, {{"error": f"invalid JSON: {{exc}}"}})
+            return
+        if not isinstance(data, dict):
+            self._write_json(400, {{"error": "payload must be a JSON object"}})
+            return
+
+        # Build ES document
+        score = data.get("score")
+        sentiment = data.get("sentiment", "")
+        if not sentiment and score is not None:
+            try:
+                s = float(score)
+                sentiment = "positive" if s > 0 else ("negative" if s < 0 else "neutral")
+            except (TypeError, ValueError):
+                pass
+
+        document = {{
+            "@timestamp": _now_iso(),
+            "event.kind": "event",
+            "event.category": "process",
+            "event.action": "user_feedback",
+            "event.dataset": "feedback",
+            "event.outcome": "success",
+            "service.name": data.get("service_name", "user-feedback"),
+            "observer.ingest_path": "otlphttpbridge",
+            "gen_ai.operation.name": "feedback",
+        }}
+        if score is not None:
+            document["gen_ai.feedback.score"] = score
+        if sentiment:
+            document["gen_ai.feedback.sentiment"] = sentiment
+        if data.get("comment"):
+            document["gen_ai.feedback.comment"] = data["comment"]
+            document["message"] = data["comment"]
+        if data.get("trace_id"):
+            document["gen_ai.feedback.trace_id"] = data["trace_id"]
+            document["trace.id"] = data["trace_id"]
+        if data.get("session_id"):
+            document["gen_ai.feedback.session_id"] = data["session_id"]
+            document["gen_ai.conversation.id"] = data["session_id"]
+        if data.get("user_id"):
+            document["gen_ai.feedback.user_id"] = data["user_id"]
+
+        try:
+            _post_document(document)
+            self._write_json(200, {{"accepted": 1, "sentiment": sentiment or "unknown"}})
         except Exception as exc:  # noqa: BLE001
             self._write_json(500, {{"error": str(exc)}})
 
