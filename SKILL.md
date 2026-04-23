@@ -120,19 +120,23 @@ Ignore generated output, docs, references, tests, and asset bundles when scannin
 
 ## Commands
 
+- `cli.py` (unified entry: `agent-obsv <command>`)
 - `bootstrap_observability.py`
+- `quickstart.py` (guided framework-specific setup)
 - `discover_agent_architecture.py`
 - `render_collector_config.py`
 - `render_es_assets.py`
 - `render_elastic_agent_assets.py`
 - `render_instrument_snippet.py` (Python or Node/TS via `--runtime`)
 - `render_llm_proxy_starter.py` (zero-code path for upstream OSS agents)
-- `alert_and_diagnose.py`
+- `instrument_frameworks.py` (auto-patch AutoGen, CrewAI, LangGraph, OpenAI Agents SDK)
+- `model_pricing.py` (built-in price table, cost summary, cost backfill)
+- `alert_and_diagnose.py` (supports `--alert-rules` JSON config, `--webhook-template slack|dingtalk|feishu|wecom`)
 - `apply_elasticsearch_assets.py`
 - `generate_report.py`
 - `validate_state.py`
 - `verify_pipeline.py` (post-apply canary + ES poll; auto-runs after `--apply-es-assets`)
-- `doctor.py` (honest five-check diagnostic; use this instead of `/healthz` when reporting pipeline status)
+- `doctor.py` (honest five-check diagnostic with copy-paste fix commands)
 - `status.py` (reports which assets are currently deployed on the target cluster)
 - `uninstall.py` (dry-run by default; removes only assets that match the prefix)
 

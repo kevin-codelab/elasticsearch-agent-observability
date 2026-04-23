@@ -82,6 +82,12 @@ Full dictionary: [`references/telemetry_schema.md`](references/telemetry_schema.
 git clone https://github.com/kevin0x5/elasticsearch-agent-observability.git
 cd elasticsearch-agent-observability
 
+# Unified CLI (recommended)
+python scripts/cli.py quickstart --agent-dir /path/to/your/agent \
+  --es-url http://localhost:9200 --es-user elastic --es-password '<pwd>' \
+  --apply --kibana-url http://localhost:5601
+
+# Or the full bootstrap with all options
 python scripts/bootstrap_observability.py \
   --workspace /path/to/your/agent \
   --output-dir generated/bootstrap \
@@ -101,17 +107,60 @@ Traceloop.init()
 
 Data flows into ES, Kibana dashboards are live.
 
+## Unified CLI
+
+```bash
+python scripts/cli.py <command> [options]
+
+# Available commands:
+#   init        Bootstrap the full observability stack
+#   quickstart  Guided one-command setup (auto-detects framework)
+#   status      Report what assets are deployed on the cluster
+#   doctor      Honest end-to-end pipeline diagnostic
+#   alert       Alert check with intelligent root-cause analysis
+#   cost        Model pricing, cost summary, and cost backfill
+#   query       Pre-built ES query templates
+#   report      Generate a smoke/metrics report
+#   validate    Configuration drift detection
+#   uninstall   Remove all managed assets from the cluster
+#   scenarios   Show "I want to do X → run Y" cheat sheet
+```
+
+## Framework support
+
+Auto-detected and instrumented via `quickstart` or `instrument_frameworks.py`:
+
+| Framework | Runtime | Auto-detect | Zero-code path |
+|-----------|---------|-------------|----------------|
+| AutoGen | Python | ✓ | traceloop-sdk |
+| CrewAI | Python | ✓ | traceloop-sdk |
+| LangGraph / LangChain | Python | ✓ | traceloop-sdk |
+| OpenAI Agents SDK | Python | ✓ | auto-patch |
+| LlamaIndex | Python | ✓ | traceloop-sdk |
+| OpenClaw | Node.js | ✓ | LLM proxy |
+| Mastra | Node.js | ✓ | Node bootstrap |
+
 ## Commands
 
 ```bash
-# Pipeline health (don't trust /healthz, use this)
-python scripts/doctor.py --es-url <url>
+# Unified CLI (preferred)
+python scripts/cli.py doctor --es-url <url>
+python scripts/cli.py alert --es-url <url> --time-range now-15m
+python scripts/cli.py cost summary --es-url <url> --time-range now-24h
 
-# Last 15 min alert + RCA
+# Direct script access (still works)
+python scripts/doctor.py --es-url <url>
 python scripts/alert_and_diagnose.py --es-url <url> --time-range now-15m
 
-# What's deployed
-python scripts/status.py --es-url <url>
+# Alert with external rules + Slack notification
+python scripts/alert_and_diagnose.py --es-url <url> \
+  --alert-rules rules.json \
+  --webhook-url https://hooks.slack.com/... --webhook-template slack
+
+# Cost analysis
+python scripts/model_pricing.py summary --es-url <url>
+python scripts/model_pricing.py enrich --es-url <url> --time-range now-7d
+python scripts/model_pricing.py prices  # show built-in price table
 
 # Config drift detection
 python scripts/validate_state.py --es-url <url> --assets-dir generated/bootstrap/elasticsearch

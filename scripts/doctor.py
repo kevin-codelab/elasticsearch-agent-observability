@@ -547,7 +547,57 @@ def render_text(result: dict[str, Any]) -> str:
         if check.get("next_step"):
             snippet = str(check["next_step"]).splitlines()[0][:200]
             lines.append(f"      → next: {snippet}")
+
+    # Actionable fix commands section — only when something is wrong.
+    if result["verdict"] != "healthy":
+        fix_cmds = _collect_fix_commands(result)
+        if fix_cmds:
+            lines.append("")
+            lines.append("── Quick fix (copy-paste) ──")
+            for cmd in fix_cmds:
+                lines.append(f"  $ {cmd}")
     return "\n".join(lines)
+
+
+def _collect_fix_commands(result: dict[str, Any]) -> list[str]:
+    """Build ready-to-paste shell commands from the per-check results."""
+    cmds: list[str] = []
+    checks = result.get("checks", {})
+
+    pp = checks.get("processes_and_ports", {})
+    paths = pp.get("paths", {})
+    bridge_status = (paths.get("bridge") or {}).get("status")
+    collector_status = (paths.get("collector") or {}).get("status")
+
+    if pp.get("zombies"):
+        cmds.append("pkill -9 -f otelcol-contrib")
+        cmds.append("./run-collector.sh --daemon")
+
+    if collector_status in ("down", "partial") and not pp.get("zombies"):
+        cmds.append("./run-collector.sh --daemon")
+
+    if bridge_status == "down":
+        cmds.append("./run-otlphttpbridge.sh --daemon")
+
+    if checks.get("recent_data", {}).get("status") == "fail" and not checks.get("recent_data", {}).get("es_unreachable"):
+        # Data plane empty but ES is reachable — nudge toward the canary.
+        index_prefix = result.get("index_prefix", "agent-obsv")
+        es_url = result.get("checks", {}).get("recent_data", {}).get("es_url") or "http://localhost:9200"
+        cmds.append(f"python scripts/verify_pipeline.py --es-url {es_url} --index-prefix {index_prefix}")
+
+    canary = checks.get("canary", {})
+    if canary.get("status") == "fail":
+        endpoint = result.get("otlp_http_endpoint", "http://127.0.0.1:14319")
+        cmds.append(f"curl -s {endpoint}/healthz   # check if endpoint is alive")
+
+    if checks.get("recent_data", {}).get("es_unreachable"):
+        es_url_hint = result.get("healthz_url", "").replace("/healthz", "").rstrip("/") or "http://localhost:9200"
+        cmds.append(f"curl -s {es_url_hint}   # verify ES is reachable")
+
+    if not cmds and result["verdict"] != "healthy":
+        cmds.append(f"python scripts/doctor.py --es-url <url> --output-format json   # get structured output for debugging")
+
+    return cmds
 
 
 def main() -> int:

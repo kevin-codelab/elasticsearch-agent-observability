@@ -612,6 +612,13 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
     lens_token_usage_id = f"{index_prefix}-lens-token-usage"
     lens_component_type_id = f"{index_prefix}-lens-component-type"
     lens_component_failures_id = f"{index_prefix}-lens-component-failures"
+    # New: Guardrail, Evaluation, Cost panels
+    lens_guardrail_actions_id = f"{index_prefix}-lens-guardrail-actions"
+    lens_guardrail_categories_id = f"{index_prefix}-lens-guardrail-categories"
+    lens_eval_outcomes_id = f"{index_prefix}-lens-eval-outcomes"
+    lens_eval_dimensions_id = f"{index_prefix}-lens-eval-dimensions"
+    lens_cost_by_model_id = f"{index_prefix}-lens-cost-by-model"
+    lens_cost_over_time_id = f"{index_prefix}-lens-cost-over-time"
 
     objects: list[dict[str, Any]] = [
         {
@@ -697,7 +704,69 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
             source_field="gen_ai.agent_ext.component_type", metric_label="Failures",
             query="event.outcome: failure and gen_ai.agent_ext.component_type:*",
         ),
+        # --- Guardrail panels ---
+        _build_terms_pie_visualization(
+            object_id=lens_guardrail_actions_id, data_view_id=data_view_id,
+            title="Guardrail actions",
+            description="Distribution of guardrail decisions: pass / block / redact.",
+            source_field="gen_ai.guardrail.action", metric_label="Events",
+            query="gen_ai.guardrail.action:*",
+        ),
+        _build_terms_pie_visualization(
+            object_id=lens_guardrail_categories_id, data_view_id=data_view_id,
+            title="Guardrail categories",
+            description="Which safety categories are firing: content_safety, prompt_injection, pii, custom.",
+            source_field="gen_ai.guardrail.category", metric_label="Events",
+            query="gen_ai.guardrail.category:*",
+        ),
+        # --- Evaluation panels ---
+        _build_terms_pie_visualization(
+            object_id=lens_eval_outcomes_id, data_view_id=data_view_id,
+            title="Evaluation outcomes",
+            description="Pass / fail / degraded distribution from evaluation runs.",
+            source_field="gen_ai.evaluation.outcome", metric_label="Evaluations",
+            query="gen_ai.evaluation.outcome:*",
+        ),
+        _build_terms_pie_visualization(
+            object_id=lens_eval_dimensions_id, data_view_id=data_view_id,
+            title="Evaluation dimensions",
+            description="Breakdown by evaluation dimension: quality, safety, latency, cost.",
+            source_field="gen_ai.evaluation.dimension", metric_label="Evaluations",
+            query="gen_ai.evaluation.dimension:*",
+        ),
+        # --- Cost panels ---
+        _build_terms_pie_visualization(
+            object_id=lens_cost_by_model_id, data_view_id=data_view_id,
+            title="Cost by model",
+            description="USD cost distribution by model. Requires gen_ai.agent_ext.cost to be populated.",
+            source_field="gen_ai.request.model", metric_label="Cost",
+            query="gen_ai.agent_ext.cost:*",
+        ),
     ]
+
+    # Cost over time XY chart
+    cost_time_state = _build_lens_state(
+        columns={
+            "col-x": {"operationType": "date_histogram", "sourceField": "@timestamp", "params": {"interval": "auto"}},
+            "col-cost": {"operationType": "sum", "sourceField": "gen_ai.agent_ext.cost", "label": "Cost (USD)"},
+        },
+        column_order=["col-x", "col-cost"],
+        visualization={
+            "legend": {"isVisible": True, "position": "right"},
+            "preferredSeriesType": "bar",
+            "layers": [{"layerId": DEFAULT_LENS_LAYER_ID, "xAccessor": "col-x", "accessors": ["col-cost"]}],
+        },
+    )
+    objects.append(
+        build_lens_saved_object(
+            object_id=lens_cost_over_time_id,
+            title="Cost over time",
+            description="Total USD cost per time bucket. Requires gen_ai.agent_ext.cost.",
+            visualization_type="lnsXY",
+            state=cost_time_state,
+            data_view_id=data_view_id,
+        ),
+    )
 
     dashboard_panels = [
         {"id": lens_event_rate_id, "type": "lens", "width": "24", "height": "12"},
@@ -708,6 +777,12 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
         {"id": lens_component_failures_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_top_tools_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_token_usage_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_cost_by_model_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_cost_over_time_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_guardrail_actions_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_guardrail_categories_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_eval_outcomes_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_eval_dimensions_id, "type": "lens", "width": "24", "height": "12"},
         {"id": session_search_id, "type": "search", "width": "24", "height": "15"},
         {"id": trace_timeline_id, "type": "search", "width": "24", "height": "15"},
         {"id": saved_search_id, "type": "search", "width": "24", "height": "15"},
@@ -788,6 +863,12 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
                 lens_token_usage_id,
                 lens_component_type_id,
                 lens_component_failures_id,
+                lens_guardrail_actions_id,
+                lens_guardrail_categories_id,
+                lens_eval_outcomes_id,
+                lens_eval_dimensions_id,
+                lens_cost_by_model_id,
+                lens_cost_over_time_id,
             ] + extra_lens_ids,
             "events_alias_pattern": f"{ds_name}*",
             "object_count": len(objects),

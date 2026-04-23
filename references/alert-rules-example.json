@@ -1,0 +1,9 @@
+{
+  "_comment": "Example alert rules config. Pass via --alert-rules rules.json. All keys are optional; missing keys fall back to CLI defaults.",
+
+  "error_threshold": 10,
+  "p95_latency_threshold_ms": 5000,
+  "token_threshold_multiplier": 3.0,
+  "time_range": "now-15m",
+  "baseline_range": "now-24h/now-15m"
+}

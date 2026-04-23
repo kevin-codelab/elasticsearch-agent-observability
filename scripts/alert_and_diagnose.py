@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,26 @@ ES_QUERY_TIMEOUT = "30s"
 TERM_BUCKET_SIZE = 5
 
 
+def _load_alert_rules(path_str: str) -> dict[str, Any]:
+    """Load alert rules from an external JSON file.
+
+    Supported keys (all optional, missing keys fall back to CLI defaults):
+      - error_threshold (int)
+      - p95_latency_threshold_ms (float)
+      - token_threshold_multiplier (float)
+      - time_range (str, e.g. "now-30m")
+      - baseline_range (str, e.g. "now-24h/now-30m")
+      - webhook_templates (dict) — see references/alert-rules-example.json
+    """
+    rules_path = Path(path_str).expanduser().resolve()
+    if not rules_path.is_file():
+        raise SkillError(f"Alert rules file not found: {rules_path}")
+    try:
+        return json.loads(rules_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SkillError(f"Invalid JSON in alert rules file: {exc}") from exc
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Agent observability alert check with root-cause analysis")
     parser.add_argument("--es-url", default="http://localhost:9200")
@@ -72,12 +93,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", help="Optional output file (JSON)")
     parser.add_argument("--output-format", choices=["json", "markdown", "text"], default="text")
     parser.add_argument("--webhook-url", default="", help="Optional webhook URL for push notification")
+    parser.add_argument(
+        "--webhook-template",
+        choices=["generic", "slack", "dingtalk", "feishu", "wecom"],
+        default="generic",
+        help="Webhook payload format: generic (raw JSON), slack (Block Kit), dingtalk, feishu, wecom",
+    )
     parser.add_argument("--write-to-es", action="store_true", help="Write alert results back to ES as a .alerts data stream")
     parser.add_argument("--generate-crontab", action="store_true", help="Print a crontab entry for scheduling this check")
     parser.add_argument("--store-to-insight", default="", help="Path to elasticsearch-insight-store scripts/store.py for auto-storing RCA conclusions")
     parser.add_argument("--insight-es-url", default="", help="ES URL for insight-store (defaults to --es-url)")
     parser.add_argument("--insight-es-user", default="", help="ES user for insight-store (defaults to --es-user)")
     parser.add_argument("--insight-es-password", default="", help="ES password for insight-store (defaults to --es-password)")
+    parser.add_argument(
+        "--alert-rules",
+        default="",
+        help="Optional JSON file with custom alert rules. Overrides threshold CLI flags. See references/alert-rules-example.json.",
+    )
     parser.add_argument(
         "--audit",
         dest="audit",
@@ -659,10 +691,18 @@ def run_alert_check(
     }
 
 
-def _send_webhook(url: str, payload: dict[str, Any]) -> None:
-    import urllib.request
+def _send_webhook(url: str, payload: dict[str, Any], *, template: str = "generic") -> None:
+    """Send alert notification to a webhook endpoint.
 
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    Templates:
+      - generic: raw JSON payload
+      - slack: Slack Block Kit format
+      - dingtalk: 钉钉 Markdown format
+      - feishu: 飞书 Interactive Card format
+      - wecom: 企业微信 Markdown format
+    """
+    body_dict = _format_webhook_payload(payload, template)
+    body = json.dumps(body_dict, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(url, data=body, method="POST")
     request.add_header("Content-Type", "application/json")
     try:
@@ -670,6 +710,84 @@ def _send_webhook(url: str, payload: dict[str, Any]) -> None:
             _ = response.read()
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️ webhook delivery failed: {exc}", file=sys.stderr)
+
+
+def _format_webhook_payload(result: dict[str, Any], template: str) -> dict[str, Any]:
+    """Format alert result into a webhook-specific payload."""
+    if template == "slack":
+        return _format_slack(result)
+    if template == "dingtalk":
+        return _format_dingtalk(result)
+    if template == "feishu":
+        return _format_feishu(result)
+    if template == "wecom":
+        return _format_wecom(result)
+    return result
+
+
+def _alert_summary_text(result: dict[str, Any]) -> str:
+    """Build a concise text summary of alerts for notification templates."""
+    alerts = result.get("alerts", [])
+    if not alerts:
+        return f"✅ No alerts triggered ({result.get('time_range', '')})"
+    lines = [f"🚨 {len(alerts)} alert(s) triggered ({result.get('time_range', '')})"]
+    for a in alerts:
+        conf = a.get("confidence")
+        conf_text = f" conf={conf}" if conf is not None else ""
+        lines.append(f"  [{a['severity'].upper()}]{conf_text} {a['alert_type']}")
+        lines.append(f"    {a['phenomenon']}")
+        lines.append(f"    → {a['recommendation']}")
+    chains = (result.get("correlation") or {}).get("chains") or []
+    if chains:
+        lines.append("Correlated chains:")
+        for c in chains:
+            lines.append(f"  {c['narrative']} (conf={c['confidence']})")
+    return "\n".join(lines)
+
+
+def _format_slack(result: dict[str, Any]) -> dict[str, Any]:
+    """Slack Block Kit payload."""
+    alerts = result.get("alerts", [])
+    blocks: list[dict[str, Any]] = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"🚨 Agent Alert: {len(alerts)} issue(s)"}},
+    ]
+    for a in alerts:
+        blocks.append({"type": "section", "text": {
+            "type": "mrkdwn",
+            "text": f"*[{a['severity'].upper()}] {a['alert_type']}*\n{a['phenomenon']}\n\n*Root cause:* {a['root_cause']}\n*Fix:* {a['recommendation']}",
+        }})
+        blocks.append({"type": "divider"})
+    return {"blocks": blocks}
+
+
+def _format_dingtalk(result: dict[str, Any]) -> dict[str, Any]:
+    """钉钉 Markdown 消息格式。"""
+    text = _alert_summary_text(result)
+    return {
+        "msgtype": "markdown",
+        "markdown": {
+            "title": "Agent Observability Alert",
+            "text": text,
+        },
+    }
+
+
+def _format_feishu(result: dict[str, Any]) -> dict[str, Any]:
+    """飞书富文本消息格式。"""
+    text = _alert_summary_text(result)
+    return {
+        "msg_type": "text",
+        "content": {"text": text},
+    }
+
+
+def _format_wecom(result: dict[str, Any]) -> dict[str, Any]:
+    """企业微信 Markdown 消息格式。"""
+    text = _alert_summary_text(result)
+    return {
+        "msgtype": "markdown",
+        "markdown": {"content": text},
+    }
 
 
 def _write_alert_to_es(config: ESConfig, index_prefix: str, result: dict[str, Any]) -> None:
@@ -896,6 +1014,21 @@ def main() -> int:
             es_user=credentials[0] if credentials else None,
             es_password=credentials[1] if credentials else None,
         )
+
+        # Load external alert rules file if provided.
+        error_threshold = args.error_threshold
+        p95_latency_threshold_ms = args.p95_latency_threshold_ms
+        token_threshold_multiplier = args.token_threshold_multiplier
+        if args.alert_rules:
+            rules = _load_alert_rules(args.alert_rules)
+            error_threshold = rules.get("error_threshold", error_threshold)
+            p95_latency_threshold_ms = rules.get("p95_latency_threshold_ms", p95_latency_threshold_ms)
+            token_threshold_multiplier = rules.get("token_threshold_multiplier", token_threshold_multiplier)
+            if "time_range" in rules:
+                args.time_range = rules["time_range"]
+            if "baseline_range" in rules:
+                args.baseline_range = rules["baseline_range"]
+
         import time as _time
         start = _time.monotonic()
         result = run_alert_check(
@@ -903,9 +1036,9 @@ def main() -> int:
             index_prefix=validate_index_prefix(args.index_prefix),
             time_range=args.time_range,
             baseline_range=args.baseline_range,
-            error_threshold=args.error_threshold,
-            p95_latency_threshold_ms=args.p95_latency_threshold_ms,
-            token_threshold_multiplier=args.token_threshold_multiplier,
+            error_threshold=error_threshold,
+            p95_latency_threshold_ms=p95_latency_threshold_ms,
+            token_threshold_multiplier=token_threshold_multiplier,
         )
         duration_ms = int((_time.monotonic() - start) * 1000)
         if args.output:
@@ -920,7 +1053,7 @@ def main() -> int:
         else:
             print(render_text(result))
         if args.webhook_url and result["status"] == "alert":
-            _send_webhook(args.webhook_url, result)
+            _send_webhook(args.webhook_url, result, template=args.webhook_template)
         if args.write_to_es:
             _write_alert_to_es(config, args.index_prefix, result)
         if args.store_to_insight and result["status"] == "alert":
