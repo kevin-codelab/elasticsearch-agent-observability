@@ -391,6 +391,174 @@ def _probe_canary(args: argparse.Namespace) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Instrumentation coverage probe
+# ---------------------------------------------------------------------------
+
+# Tier 2 fields — the agent must set these to unlock most dashboard panels.
+_TIER2_FIELDS = {
+    "gen_ai.tool.name": {
+        "tier": 2,
+        "label": "tool name",
+        "powers": "tool-level latency/error panels, error_rate_spike RCA",
+        "fix": '@traced_tool_call("my_tool")\ndef my_tool(...):\n    ...',
+    },
+    "gen_ai.conversation.id": {
+        "tier": 2,
+        "label": "session / conversation ID",
+        "powers": "session_failure_hotspot alert, session drill-down",
+        "fix": 'span.set_attribute("gen_ai.conversation.id", session_id)',
+    },
+    "gen_ai.agent_ext.turn_id": {
+        "tier": 2,
+        "label": "turn ID",
+        "powers": "long_turn_hotspot alert, turn-level diffing",
+        "fix": 'span.set_attribute("gen_ai.agent_ext.turn_id", turn_id)',
+    },
+    "gen_ai.agent_ext.component_type": {
+        "tier": 2,
+        "label": "component type",
+        "powers": "per-component dashboards, every alert filter",
+        "fix": 'span.set_attribute("gen_ai.agent_ext.component_type", "tool")  # or llm/mcp/memory/knowledge/guardrail/runtime',
+    },
+}
+
+# Tier 3 fields — nice-to-have for sharper alerts and richer panels.
+_TIER3_FIELDS = {
+    "gen_ai.agent_ext.retry_count": {
+        "tier": 3,
+        "label": "retry count",
+        "powers": "retry_storm alert",
+        "fix": 'span.set_attribute("gen_ai.agent_ext.retry_count", retry_count)',
+    },
+    "error.type": {
+        "tier": 3,
+        "label": "error type classification",
+        "powers": "RCA phrasing (timeout vs application-level)",
+        "fix": 'span.set_attribute("error.type", "timeout")  # or rate_limit/api_error/auth_error/tool_error',
+    },
+    "gen_ai.agent_ext.cost": {
+        "tier": 3,
+        "label": "per-call cost",
+        "powers": "cost panels, cost_regression evaluator",
+        "fix": "agent-obsv cost enrich --es-url <url>  # backfill from built-in price table",
+    },
+    "gen_ai.agent_ext.reasoning.action": {
+        "tier": 3,
+        "label": "reasoning trace",
+        "powers": "reasoning panels, session replay decision trail",
+        "fix": 'emit_reasoning_span(action="tool_call", decision_type="tool_selection", rationale="...")',
+    },
+    "gen_ai.feedback.score": {
+        "tier": 3,
+        "label": "user feedback",
+        "powers": "feedback sentiment/score panels",
+        "fix": 'curl -X POST http://127.0.0.1:14319/v1/feedback -d \'{"score":1,"trace_id":"..."}\'',
+    },
+}
+
+
+def _probe_instrumentation_coverage(
+    config: "ESConfig", *, index_prefix: str, freshness_minutes: int
+) -> dict[str, Any]:
+    """Check which Tier 2/3 fields actually have data in recent docs.
+
+    Returns a structured report that an AI agent can read and act on:
+    each missing field comes with the exact code snippet to fix it.
+    """
+    ds_glob = f"{build_data_stream_name(index_prefix)}*"
+    all_fields = {**_TIER2_FIELDS, **_TIER3_FIELDS}
+
+    # Build an exists-check aggregation for each field.
+    aggs: dict[str, Any] = {}
+    for field_name in all_fields:
+        safe_key = field_name.replace(".", "_")
+        aggs[safe_key] = {"filter": {"exists": {"field": field_name}}}
+
+    payload = {
+        "size": 0,
+        "timeout": "10s",
+        "query": {
+            "bool": {
+                "filter": [{"range": {"@timestamp": {"gte": f"now-{freshness_minutes}m"}}}],
+                "must_not": [{"prefix": {"event.dataset": "internal."}}],
+            }
+        },
+        "aggs": aggs,
+    }
+
+    try:
+        result = es_request(config, "POST", f"/{ds_glob}/_search", payload)
+    except SkillError as exc:
+        return {"status": "warn", "detail": f"Cannot query instrumentation coverage: {exc}"}
+
+    result_aggs = result.get("aggregations", {})
+    total_docs = ((result.get("hits") or {}).get("total") or {}).get("value", 0)
+    if total_docs == 0:
+        return {"status": "warn", "detail": "No real docs to check coverage against"}
+
+    present: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+
+    for field_name, meta in all_fields.items():
+        safe_key = field_name.replace(".", "_")
+        doc_count = result_aggs.get(safe_key, {}).get("doc_count", 0)
+        coverage = doc_count / total_docs if total_docs > 0 else 0
+        entry = {
+            "field": field_name,
+            "tier": meta["tier"],
+            "label": meta["label"],
+            "doc_count": doc_count,
+            "coverage": round(coverage, 3),
+            "powers": meta["powers"],
+        }
+        if doc_count > 0:
+            present.append(entry)
+        else:
+            entry["fix"] = meta["fix"]
+            missing.append(entry)
+
+    # Score: Tier 2 fields weight 2x, Tier 3 weight 1x
+    max_score = sum(2 if m["tier"] == 2 else 1 for m in all_fields.values())
+    earned = sum(2 if e["tier"] == 2 else 1 for e in present)
+    score = round(earned / max_score, 2) if max_score > 0 else 1.0
+
+    tier2_missing = [m for m in missing if m["tier"] == 2]
+    tier3_missing = [m for m in missing if m["tier"] == 3]
+
+    if tier2_missing:
+        status = "warn"
+        detail = (
+            f"Instrumentation coverage {score:.0%}. "
+            f"Missing {len(tier2_missing)} Tier 2 field(s): {', '.join(m['field'] for m in tier2_missing)}. "
+            f"Half the dashboard panels will be empty until these are wired."
+        )
+    elif tier3_missing:
+        status = "pass"
+        detail = (
+            f"Instrumentation coverage {score:.0%}. "
+            f"All Tier 2 fields present. {len(tier3_missing)} optional Tier 3 field(s) missing."
+        )
+    else:
+        status = "pass"
+        detail = f"Instrumentation coverage 100%. All Tier 2 and Tier 3 fields have data."
+
+    return {
+        "status": status,
+        "detail": detail,
+        "score": score,
+        "total_docs": total_docs,
+        "present": present,
+        "missing": missing,
+        "tier2_missing_count": len(tier2_missing),
+        "tier3_missing_count": len(tier3_missing),
+        "fix": (
+            "See the 'missing' array for per-field fix snippets. "
+            "An AI agent can read this output and auto-apply the fixes to your codebase."
+        ) if missing else "",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Verdict aggregation
 # ---------------------------------------------------------------------------
 
@@ -441,9 +609,15 @@ def _aggregate(checks: dict[str, dict[str, Any]]) -> str:
     ):
         return "degraded_collector_path"
 
-    if any(s == "warn" for s in statuses.values()):
+    # instrumentation_coverage is informational — missing Tier 2/3 fields
+    # do not mean the pipeline is broken, just that dashboards are partial.
+    # Exclude it from the warn → degraded logic.
+    _INFORMATIONAL_CHECKS = {"instrumentation_coverage"}
+    pipeline_statuses = {name: s for name, s in statuses.items() if name not in _INFORMATIONAL_CHECKS}
+
+    if any(s == "warn" for s in pipeline_statuses.values()):
         return "degraded"
-    if all(s in {"pass", "skipped"} for s in statuses.values()):
+    if all(s in {"pass", "skipped"} for s in pipeline_statuses.values()):
         return "healthy"
     return "degraded"
 
@@ -469,6 +643,12 @@ def run_doctor(args: argparse.Namespace) -> dict[str, Any]:
         checks["canary"] = {"status": "skipped", "detail": "skipped by --skip-canary"}
     else:
         checks["canary"] = _probe_canary(args)
+
+    # Instrumentation coverage — only run when we have real data.
+    if checks.get("recent_data", {}).get("status") == "pass":
+        checks["instrumentation_coverage"] = _probe_instrumentation_coverage(
+            config, index_prefix=index_prefix, freshness_minutes=args.freshness_minutes
+        )
 
     verdict = _aggregate(checks)
 

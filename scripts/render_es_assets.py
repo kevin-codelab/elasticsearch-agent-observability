@@ -326,6 +326,32 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
                     "ignore_failure": True,
                 }
             },
+            # --- reasoning trace PII governance ---
+            # Truncate rationale and input_summary to prevent unbounded PII leakage.
+            # Defence-in-depth: even if the agent accidentally writes raw prompts
+            # into reasoning fields, only the first N chars survive ingest.
+            {
+                "script": {
+                    "lang": "painless",
+                    "source": (
+                        "int MAX_RATIONALE = 500; "
+                        "int MAX_INPUT_SUMMARY = 300; "
+                        "def r = ctx['gen_ai.agent_ext.reasoning.rationale']; "
+                        "if (r instanceof String && r.length() > MAX_RATIONALE) { "
+                        "  ctx['gen_ai.agent_ext.reasoning.rationale'] = r.substring(0, MAX_RATIONALE) + '... [truncated]'; "
+                        "} "
+                        "def s = ctx['gen_ai.agent_ext.reasoning.input_summary']; "
+                        "if (s instanceof String && s.length() > MAX_INPUT_SUMMARY) { "
+                        "  ctx['gen_ai.agent_ext.reasoning.input_summary'] = s.substring(0, MAX_INPUT_SUMMARY) + '... [truncated]'; "
+                        "} "
+                        "def c = ctx['gen_ai.feedback.comment']; "
+                        "if (c instanceof String && c.length() > 1000) { "
+                        "  ctx['gen_ai.feedback.comment'] = c.substring(0, 1000) + '... [truncated]'; "
+                        "}"
+                    ),
+                    "ignore_failure": True,
+                }
+            },
         ],
         "on_failure": [
             {"set": {"field": "observer.ingest_error", "value": "{{ _ingest.on_failure_message }}"}}
