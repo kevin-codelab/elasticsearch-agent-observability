@@ -76,6 +76,18 @@ These fields extend OTel GenAI Semantic Conventions for agent runtime observabil
 - `gen_ai.evaluation.outcome` — `pass` / `fail` / `degraded`
 - `gen_ai.evaluation.dimension` — `quality` / `safety` / `latency` / `cost`
 
+## Reasoning trace fields
+
+Record **why** the agent chose a particular action at each decision point. These fields turn flat event logs into an explainable decision trail.
+
+- `gen_ai.agent_ext.reasoning.action` — chosen action: `tool_call` / `delegate` / `respond` / `wait` / `escalate`
+- `gen_ai.agent_ext.reasoning.alternatives` — rejected alternatives (comma-separated)
+- `gen_ai.agent_ext.reasoning.rationale` — free-text why-this-action explanation (NOT the raw prompt)
+- `gen_ai.agent_ext.reasoning.confidence` — agent's self-reported confidence 0–1
+- `gen_ai.agent_ext.reasoning.input_summary` — condensed input context
+- `gen_ai.agent_ext.reasoning.decision_type` — `routing` / `tool_selection` / `delegation` / `termination` / `retry`
+- `gen_ai.agent_ext.reasoning.step_index` — ordinal within the turn (0-based)
+
 ## Important rule
 
 Do **not** rely on flat legacy fields such as `agent_id`, `tool_name`, `token_input`, or `captured_at`.

@@ -36,6 +36,122 @@ def _get_tracer():
 
 
 # ---------------------------------------------------------------------------
+# Reasoning trace helpers
+# ---------------------------------------------------------------------------
+
+def traced_decision(
+    *,
+    action: str,
+    decision_type: str = "routing",
+    rationale: str = "",
+    alternatives: str = "",
+    confidence: float | None = None,
+    input_summary: str = "",
+    step_index: int | None = None,
+):
+    """Decorator / context-helper that emits a reasoning trace span.
+
+    Use this to record WHY an agent chose a particular action at a decision point.
+
+    Args:
+        action: What the agent decided to do (tool_call / delegate / respond / wait / escalate)
+        decision_type: Category of decision (routing / tool_selection / delegation / termination / retry)
+        rationale: Free-text explanation of why this action was chosen
+        alternatives: Rejected alternatives (comma-separated)
+        confidence: Agent's self-reported confidence 0-1
+        input_summary: Condensed input context (NOT the raw prompt)
+        step_index: Ordinal within the turn (0-based)
+
+    Can be used as a decorator:
+        @traced_decision(action="tool_call", decision_type="tool_selection", rationale="DB has the data")
+        def call_database(query): ...
+
+    Or as a context manager via the returned span.
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            tracer = _get_tracer()
+            if not tracer:
+                return func(*args, **kwargs)
+            attrs: dict[str, Any] = {
+                "gen_ai.agent_ext.reasoning.action": action,
+                "gen_ai.agent_ext.reasoning.decision_type": decision_type,
+                "gen_ai.operation.name": "decision",
+            }
+            if rationale:
+                attrs["gen_ai.agent_ext.reasoning.rationale"] = rationale
+            if alternatives:
+                attrs["gen_ai.agent_ext.reasoning.alternatives"] = alternatives
+            if confidence is not None:
+                attrs["gen_ai.agent_ext.reasoning.confidence"] = confidence
+            if input_summary:
+                attrs["gen_ai.agent_ext.reasoning.input_summary"] = input_summary
+            if step_index is not None:
+                attrs["gen_ai.agent_ext.reasoning.step_index"] = step_index
+            with tracer.start_as_current_span(
+                f"decision.{decision_type}.{action}",
+                attributes=attrs,
+            ) as span:
+                try:
+                    result = func(*args, **kwargs)
+                    span.set_attribute("event.outcome", "success")
+                    return result
+                except Exception as exc:
+                    span.set_attribute("event.outcome", "failure")
+                    span.set_attribute("error.type", type(exc).__name__)
+                    span.record_exception(exc)
+                    raise
+        wrapper.__name__ = func.__name__
+        wrapper.__doc__ = func.__doc__
+        return wrapper
+    return decorator
+
+
+def emit_reasoning_span(
+    *,
+    action: str,
+    decision_type: str = "routing",
+    rationale: str = "",
+    alternatives: str = "",
+    confidence: float | None = None,
+    input_summary: str = "",
+    step_index: int | None = None,
+) -> None:
+    """Emit a standalone reasoning trace event (non-decorator usage).
+
+    Call this at any decision point to record the agent's reasoning:
+
+        emit_reasoning_span(
+            action="tool_call",
+            decision_type="tool_selection",
+            rationale="User asked about weather, calling weather API",
+            alternatives="web_search, cached_response",
+            confidence=0.85,
+        )
+    """
+    tracer = _get_tracer()
+    if not tracer:
+        return
+    attrs: dict[str, Any] = {
+        "gen_ai.agent_ext.reasoning.action": action,
+        "gen_ai.agent_ext.reasoning.decision_type": decision_type,
+        "gen_ai.operation.name": "decision",
+    }
+    if rationale:
+        attrs["gen_ai.agent_ext.reasoning.rationale"] = rationale
+    if alternatives:
+        attrs["gen_ai.agent_ext.reasoning.alternatives"] = alternatives
+    if confidence is not None:
+        attrs["gen_ai.agent_ext.reasoning.confidence"] = confidence
+    if input_summary:
+        attrs["gen_ai.agent_ext.reasoning.input_summary"] = input_summary
+    if step_index is not None:
+        attrs["gen_ai.agent_ext.reasoning.step_index"] = step_index
+    with tracer.start_as_current_span(f"decision.{decision_type}.{action}", attributes=attrs) as span:
+        span.set_attribute("event.outcome", "success")
+
+
+# ---------------------------------------------------------------------------
 # AutoGen
 # ---------------------------------------------------------------------------
 

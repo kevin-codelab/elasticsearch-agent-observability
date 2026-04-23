@@ -52,7 +52,8 @@ The agent has to wrap its own call sites. The Python or Node instrumentation bun
 | `gen_ai.agent_ext.latency_ms` | explicit turn latency for `long_turn_hotspot` |
 | `gen_ai.agent_ext.cost` | cost panels in the dashboard |
 | `gen_ai.guardrail.*` | safety dashboards (see `telemetry_schema.md`) |
-| `gen_ai.evaluation.*` | regression dashboards (see `telemetry_schema.md`) |
+| `gen_ai.evaluation.*` | regression dashboards; populated by `evaluate.py run --write-to-es` |
+| `gen_ai.agent_ext.reasoning.*` | reasoning trace panels; decision replay in trace timeline |
 
 ## Rules
 

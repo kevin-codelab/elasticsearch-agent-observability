@@ -198,7 +198,7 @@ class DashboardExtensionsTests(unittest.TestCase):
         bundle_default = render_es_assets.build_kibana_saved_objects("agent-obsv")
         bundle_none = render_es_assets.build_kibana_saved_objects("agent-obsv", extensions=None)
         self.assertEqual(bundle_default["summary"]["object_count"], bundle_none["summary"]["object_count"])
-        self.assertEqual(len(bundle_default["summary"]["lens_ids"]), 14)
+        self.assertEqual(len(bundle_default["summary"]["lens_ids"]), 16)
         self.assertIn("session_search_id", bundle_default["summary"])
 
     def test_lens_objects_omit_kibana_saved_object_meta(self) -> None:

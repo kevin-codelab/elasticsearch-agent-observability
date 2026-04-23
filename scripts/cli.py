@@ -32,6 +32,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "doctor":     ("doctor",                  "Honest end-to-end pipeline diagnostic"),
     "alert":      ("alert_and_diagnose",      "Alert check with intelligent root-cause analysis"),
     "cost":       ("model_pricing",           "Model pricing, cost summary, and cost backfill"),
+    "eval":       ("evaluate",                "Run regression evaluators against recent traces"),
     "query":      ("query",                   "Pre-built ES query templates"),
     "report":     ("generate_report",         "Generate a smoke/metrics report"),
     "validate":   ("validate_state",          "Configuration drift detection"),

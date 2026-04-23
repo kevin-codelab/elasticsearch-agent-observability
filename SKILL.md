@@ -67,6 +67,8 @@ Current repo capabilities are best described as:
 - observability maturity scoring with upgrade guidance
 - dashboard extensions via external JSON/YAML panel declarations
 - ECS / GenAI-native ingest contract with no legacy flat-field remap
+- reasoning trace schema (`gen_ai.agent_ext.reasoning.*`) for recording agent decision rationale, alternatives, and confidence at each step; the trace timeline view in Kibana shows decision-by-decision replay
+- lightweight evaluation runner (`evaluate.py`) with 6 built-in regression evaluators (latency, error rate, token efficiency, cost, tool coverage, guardrail block rate); writes `gen_ai.evaluation.*` events to ES so the dashboard panels and alert engine can detect regressions
 - all features target the Basic (free) Elasticsearch license
 
 Do not claim that the repo already:
@@ -131,6 +133,7 @@ Ignore generated output, docs, references, tests, and asset bundles when scannin
 - `render_llm_proxy_starter.py` (zero-code path for upstream OSS agents)
 - `instrument_frameworks.py` (auto-patch AutoGen, CrewAI, LangGraph, OpenAI Agents SDK)
 - `model_pricing.py` (built-in price table, cost summary, cost backfill)
+- `evaluate.py` (lightweight regression evaluator: latency / error rate / token / cost / tool coverage / guardrail)
 - `alert_and_diagnose.py` (supports `--alert-rules` JSON config, `--webhook-template slack|dingtalk|feishu|wecom`)
 - `apply_elasticsearch_assets.py`
 - `generate_report.py`

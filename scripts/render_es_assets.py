@@ -142,6 +142,14 @@ def _ecs_base_properties() -> dict[str, Any]:
         "gen_ai.agent_ext.parent_agent.id": {"type": "keyword"},
         "gen_ai.agent_ext.causality.trigger_span_id": {"type": "keyword"},
         "gen_ai.agent_ext.delegation_target": {"type": "keyword"},
+        # --- reasoning trace ---
+        "gen_ai.agent_ext.reasoning.action": {"type": "keyword"},         # chosen action: tool_call / delegate / respond / wait / escalate
+        "gen_ai.agent_ext.reasoning.alternatives": {"type": "keyword"},   # rejected alternatives (comma-separated or array)
+        "gen_ai.agent_ext.reasoning.rationale": {"type": "text"},         # free-text why-this-action explanation
+        "gen_ai.agent_ext.reasoning.confidence": {"type": "float"},       # agent's self-reported confidence 0-1
+        "gen_ai.agent_ext.reasoning.input_summary": {"type": "text"},     # condensed input context (NOT the raw prompt)
+        "gen_ai.agent_ext.reasoning.decision_type": {"type": "keyword"},  # routing / tool_selection / delegation / termination / retry
+        "gen_ai.agent_ext.reasoning.step_index": {"type": "integer"},     # ordinal within the turn (0-based)
     }
 
 
@@ -619,6 +627,9 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
     lens_eval_dimensions_id = f"{index_prefix}-lens-eval-dimensions"
     lens_cost_by_model_id = f"{index_prefix}-lens-cost-by-model"
     lens_cost_over_time_id = f"{index_prefix}-lens-cost-over-time"
+    # Reasoning trace panels
+    lens_reasoning_actions_id = f"{index_prefix}-lens-reasoning-actions"
+    lens_reasoning_decision_types_id = f"{index_prefix}-lens-reasoning-decision-types"
 
     objects: list[dict[str, Any]] = [
         {
@@ -664,6 +675,9 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
                 "gen_ai.agent_ext.component_type", "gen_ai.agent_ext.latency_ms",
                 "gen_ai.agent_ext.turn_id", "span.id",
                 "gen_ai.agent_ext.parent_agent.id",
+                "gen_ai.agent_ext.reasoning.action",
+                "gen_ai.agent_ext.reasoning.decision_type",
+                "gen_ai.agent_ext.reasoning.rationale",
             ],
             query="trace.id:*",
         ),
@@ -768,6 +782,26 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
         ),
     )
 
+    # Reasoning trace panels
+    objects.append(
+        _build_terms_pie_visualization(
+            object_id=lens_reasoning_actions_id, data_view_id=data_view_id,
+            title="Reasoning actions",
+            description="Distribution of agent decision actions: tool_call / delegate / respond / wait / escalate.",
+            source_field="gen_ai.agent_ext.reasoning.action", metric_label="Decisions",
+            query="gen_ai.agent_ext.reasoning.action:*",
+        ),
+    )
+    objects.append(
+        _build_terms_pie_visualization(
+            object_id=lens_reasoning_decision_types_id, data_view_id=data_view_id,
+            title="Decision types",
+            description="Breakdown of agent reasoning decision types: routing, tool_selection, delegation, termination, retry.",
+            source_field="gen_ai.agent_ext.reasoning.decision_type", metric_label="Decisions",
+            query="gen_ai.agent_ext.reasoning.decision_type:*",
+        ),
+    )
+
     dashboard_panels = [
         {"id": lens_event_rate_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_latency_id, "type": "lens", "width": "24", "height": "12"},
@@ -783,6 +817,8 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
         {"id": lens_guardrail_categories_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_eval_outcomes_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_eval_dimensions_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_reasoning_actions_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_reasoning_decision_types_id, "type": "lens", "width": "24", "height": "12"},
         {"id": session_search_id, "type": "search", "width": "24", "height": "15"},
         {"id": trace_timeline_id, "type": "search", "width": "24", "height": "15"},
         {"id": saved_search_id, "type": "search", "width": "24", "height": "15"},
@@ -869,6 +905,8 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
                 lens_eval_dimensions_id,
                 lens_cost_by_model_id,
                 lens_cost_over_time_id,
+                lens_reasoning_actions_id,
+                lens_reasoning_decision_types_id,
             ] + extra_lens_ids,
             "events_alias_pattern": f"{ds_name}*",
             "object_count": len(objects),
