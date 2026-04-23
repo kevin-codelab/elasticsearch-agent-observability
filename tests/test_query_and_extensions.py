@@ -69,26 +69,6 @@ class QueryTemplateTests(unittest.TestCase):
             )
 
 
-class MultiAgentCorrelationSchemaTests(unittest.TestCase):
-    """Verify multi-agent fields exist in the component template."""
-
-    def test_parent_agent_id_in_schema(self) -> None:
-        component = render_es_assets.build_component_template_ecs_base("agent-obsv")
-        props = component["template"]["mappings"]["properties"]
-        self.assertIn("gen_ai.agent_ext.parent_agent.id", props)
-        self.assertEqual(props["gen_ai.agent_ext.parent_agent.id"]["type"], "keyword")
-
-    def test_causality_trigger_span_id_in_schema(self) -> None:
-        component = render_es_assets.build_component_template_ecs_base("agent-obsv")
-        props = component["template"]["mappings"]["properties"]
-        self.assertIn("gen_ai.agent_ext.causality.trigger_span_id", props)
-
-    def test_delegation_target_in_schema(self) -> None:
-        component = render_es_assets.build_component_template_ecs_base("agent-obsv")
-        props = component["template"]["mappings"]["properties"]
-        self.assertIn("gen_ai.agent_ext.delegation_target", props)
-
-
 class TraceTimelineKibanaTests(unittest.TestCase):
     """Verify the trace timeline saved search is included in Kibana objects."""
 

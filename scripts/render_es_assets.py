@@ -403,14 +403,8 @@ def build_search_saved_object(*, object_id: str, title: str, description: str, d
 
 
 DEFAULT_LENS_LAYER_ID = "layer1"
-
-
-def _lens_current_reference_name() -> str:
-    return "indexpattern-datasource-current-indexpattern"
-
-
-def _lens_layer_reference_name(layer_id: str = DEFAULT_LENS_LAYER_ID) -> str:
-    return f"indexpattern-datasource-layer-{layer_id}"
+_LENS_CURRENT_REF = "indexpattern-datasource-current-indexpattern"
+_LENS_LAYER_REF_PREFIX = "indexpattern-datasource-layer-"
 
 
 def _build_lens_state(*, columns: dict[str, Any], column_order: list[str], visualization: dict[str, Any], layer_id: str = DEFAULT_LENS_LAYER_ID, query: str = "") -> dict[str, Any]:
@@ -418,13 +412,13 @@ def _build_lens_state(*, columns: dict[str, Any], column_order: list[str], visua
         "adHocDataViews": {},
         "datasourceStates": {
             "indexpattern": {
-                "currentIndexPatternId": _lens_current_reference_name(),
+                "currentIndexPatternId": _LENS_CURRENT_REF,
                 "layers": {
                     layer_id: {
                         "columns": columns,
                         "columnOrder": column_order,
                         "incompleteColumns": {},
-                        "indexPatternId": _lens_layer_reference_name(layer_id),
+                        "indexPatternId": f"{_LENS_LAYER_REF_PREFIX}{layer_id}",
                     }
                 },
             }
@@ -447,8 +441,8 @@ def build_lens_saved_object(*, object_id: str, title: str, description: str, vis
             "state": state,
         },
         "references": [
-            {"id": data_view_id, "type": "index-pattern", "name": _lens_current_reference_name()},
-            {"id": data_view_id, "type": "index-pattern", "name": _lens_layer_reference_name()},
+            {"id": data_view_id, "type": "index-pattern", "name": _LENS_CURRENT_REF},
+            {"id": data_view_id, "type": "index-pattern", "name": f"{_LENS_LAYER_REF_PREFIX}{DEFAULT_LENS_LAYER_ID}"},
         ],
     }
 
@@ -533,56 +527,6 @@ def _build_lens_latency_percentiles(*, object_id: str, data_view_id: str) -> dic
         visualization_type="lnsXY",
         state=state,
         data_view_id=data_view_id,
-    )
-
-
-def _build_lens_top_tools(*, object_id: str, data_view_id: str) -> dict[str, Any]:
-    """Lens pie: top tools by call count."""
-    return _build_terms_pie_visualization(
-        object_id=object_id,
-        data_view_id=data_view_id,
-        title="Top tools by call count",
-        description="Pie chart of most-called agent tools.",
-        source_field="gen_ai.tool.name",
-        metric_label="Calls",
-    )
-
-
-def _build_lens_top_sessions(*, object_id: str, data_view_id: str) -> dict[str, Any]:
-    """Lens pie: sessions with the most activity in the window."""
-    return _build_terms_pie_visualization(
-        object_id=object_id,
-        data_view_id=data_view_id,
-        title="Top sessions by event volume",
-        description="Most active gen_ai.conversation.id values in the selected time window.",
-        source_field="gen_ai.conversation.id",
-        metric_label="Events",
-    )
-
-
-def _build_lens_failed_sessions(*, object_id: str, data_view_id: str) -> dict[str, Any]:
-    """Lens pie: sessions with failure concentration."""
-    return _build_terms_pie_visualization(
-        object_id=object_id,
-        data_view_id=data_view_id,
-        title="Failed sessions",
-        description="Failure-heavy sessions for fast conversation-level drilldown.",
-        source_field="gen_ai.conversation.id",
-        metric_label="Failures",
-        query="event.outcome: failure and gen_ai.conversation.id:*",
-    )
-
-
-def _build_lens_component_failures(*, object_id: str, data_view_id: str) -> dict[str, Any]:
-    """Lens pie: failing components by component type."""
-    return _build_terms_pie_visualization(
-        object_id=object_id,
-        data_view_id=data_view_id,
-        title="Failure hotspots by component",
-        description="Which component types are producing the most failed events.",
-        source_field="gen_ai.agent_ext.component_type",
-        metric_label="Failures",
-        query="event.outcome: failure and gen_ai.agent_ext.component_type:*",
     )
 
 
@@ -718,9 +662,25 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
         ),
         _build_lens_event_rate_visualization(object_id=lens_event_rate_id, data_view_id=data_view_id),
         _build_lens_latency_percentiles(object_id=lens_latency_id, data_view_id=data_view_id),
-        _build_lens_top_sessions(object_id=lens_top_sessions_id, data_view_id=data_view_id),
-        _build_lens_failed_sessions(object_id=lens_failed_sessions_id, data_view_id=data_view_id),
-        _build_lens_top_tools(object_id=lens_top_tools_id, data_view_id=data_view_id),
+        _build_terms_pie_visualization(
+            object_id=lens_top_sessions_id, data_view_id=data_view_id,
+            title="Top sessions by event volume",
+            description="Most active gen_ai.conversation.id values in the selected time window.",
+            source_field="gen_ai.conversation.id", metric_label="Events",
+        ),
+        _build_terms_pie_visualization(
+            object_id=lens_failed_sessions_id, data_view_id=data_view_id,
+            title="Failed sessions",
+            description="Failure-heavy sessions for fast conversation-level drilldown.",
+            source_field="gen_ai.conversation.id", metric_label="Failures",
+            query="event.outcome: failure and gen_ai.conversation.id:*",
+        ),
+        _build_terms_pie_visualization(
+            object_id=lens_top_tools_id, data_view_id=data_view_id,
+            title="Top tools by call count",
+            description="Pie chart of most-called agent tools.",
+            source_field="gen_ai.tool.name", metric_label="Calls",
+        ),
         _build_lens_token_usage(object_id=lens_token_usage_id, data_view_id=data_view_id),
         _build_terms_pie_visualization(
             object_id=lens_component_type_id,
@@ -730,7 +690,13 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
             source_field="gen_ai.agent_ext.component_type",
             metric_label="Events",
         ),
-        _build_lens_component_failures(object_id=lens_component_failures_id, data_view_id=data_view_id),
+        _build_terms_pie_visualization(
+            object_id=lens_component_failures_id, data_view_id=data_view_id,
+            title="Failure hotspots by component",
+            description="Which component types are producing the most failed events.",
+            source_field="gen_ai.agent_ext.component_type", metric_label="Failures",
+            query="event.outcome: failure and gen_ai.agent_ext.component_type:*",
+        ),
     ]
 
     dashboard_panels = [

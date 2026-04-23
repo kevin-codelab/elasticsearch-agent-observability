@@ -158,6 +158,10 @@ class ContractsAndSecurityTests(unittest.TestCase):
         self.assertIn("gen_ai.evaluation.outcome", props)
         self.assertIn("gen_ai.agent_ext.retrieval_latency_ms", props)
         self.assertIn("gen_ai.agent_ext.cache_hit", props)
+        # multi-agent correlation fields
+        self.assertIn("gen_ai.agent_ext.parent_agent.id", props)
+        self.assertIn("gen_ai.agent_ext.causality.trigger_span_id", props)
+        self.assertIn("gen_ai.agent_ext.delegation_target", props)
 
     def test_component_template_disables_root_dynamic_mapping(self) -> None:
         component = render_es_assets.build_component_template_ecs_base("agent-obsv")

@@ -115,12 +115,6 @@ def normalize_text(text: str) -> str:
     return "\n".join(line for line in lines if line).strip()
 
 
-def slugify(value: str, fallback: str = "item") -> str:
-    value = value.strip().lower()
-    value = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", value)
-    value = re.sub(r"-+", "-", value).strip("-")
-    return value or fallback
-
 
 def safe_relative(path: Path, base: Path | None = None) -> str:
     base = base or ROOT_DIR

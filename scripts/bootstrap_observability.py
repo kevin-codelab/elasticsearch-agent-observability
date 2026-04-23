@@ -227,6 +227,54 @@ def build_runtime_env(
     return "\n".join(lines)
 
 
+def _build_daemon_case_blocks(label: str, start_cmd: str, pidfile_var: str, logfile_var: str) -> list[str]:
+    """Shared --daemon / --stop / --status / foreground case blocks for bash launchers.
+
+    ``label``       — human label used in echo messages ("collector" or "bridge")
+    ``start_cmd``   — shell command that launches the process in daemon mode
+    ``pidfile_var`` — bash variable name holding the pidfile path (e.g. '"$PIDFILE"')
+    ``logfile_var`` — bash variable name holding the logfile path (e.g. '"$LOGFILE"')
+    """
+    return [
+        "  --daemon)",
+        f'    mkdir -p "$(dirname {logfile_var})"',
+        f'    if [ -f {pidfile_var} ] && kill -0 "$(cat {pidfile_var})" 2>/dev/null; then',
+        f'      echo "{label} already running (pid $(cat {pidfile_var})); use --stop first" >&2; exit 1',
+        "    fi",
+        f"    {start_cmd}",
+        "    sleep 0.5",
+        f'    if kill -0 "$(cat {pidfile_var})" 2>/dev/null; then',
+        f'      echo "{label} daemonised (pid $(cat {pidfile_var}), log {logfile_var.strip(chr(34))})"',
+        "    else",
+        f'      echo "{label} failed to start; see {logfile_var.strip(chr(34))}" >&2',
+        f'      rm -f {pidfile_var}; exit 1',
+        "    fi",
+        "    ;;",
+        "  --stop)",
+        f'    if [ -f {pidfile_var} ] && kill -0 "$(cat {pidfile_var})" 2>/dev/null; then',
+        f'      PID=$(cat {pidfile_var})',
+        '      kill "$PID"',
+        "      # Wait up to 5 seconds for graceful exit, then escalate to SIGKILL.",
+        '      for i in 1 2 3 4 5; do kill -0 "$PID" 2>/dev/null || break; sleep 1; done',
+        '      if kill -0 "$PID" 2>/dev/null; then',
+        f'        echo "{label} did not exit after SIGTERM; sending SIGKILL" >&2',
+        '        kill -9 "$PID" 2>/dev/null || true',
+        "      fi",
+        f'      rm -f {pidfile_var}; echo "{label} stopped"',
+        "    else",
+        f'      echo "no running {label} pidfile" >&2; rm -f {pidfile_var}; exit 1',
+        "    fi",
+        "    ;;",
+        "  --status)",
+        f'    if [ -f {pidfile_var} ] && kill -0 "$(cat {pidfile_var})" 2>/dev/null; then',
+        f'      echo "running (pid $(cat {pidfile_var}))"',
+        "    else",
+        f'      echo "not running"; rm -f {pidfile_var}; exit 1',
+        "    fi",
+        "    ;;",
+    ]
+
+
 def build_collector_run_script(*, collector_bin: str, collector_path: Path, env_path: Path) -> str:
     """Launcher for the OTel Collector.
 
@@ -244,6 +292,10 @@ def build_collector_run_script(*, collector_bin: str, collector_path: Path, env_
     """
     collector_name = collector_path.name
     env_name = env_path.name
+    daemon_start = (
+        f'( cd "$SCRIPT_DIR" && setsid nohup "${{OTELCOL_BIN}}" '
+        f'--config "$SCRIPT_DIR/{collector_name}" >>"$LOGFILE" 2>&1 < /dev/null & echo $! >"$PIDFILE" )'
+    )
     return "\n".join(
         [
             "#!/usr/bin/env bash",
@@ -256,51 +308,14 @@ def build_collector_run_script(*, collector_bin: str, collector_path: Path, env_
             "set -euo pipefail",
             'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
             f'PIDFILE="$SCRIPT_DIR/.{collector_name}.pid"',
-            f'LOGFILE="$SCRIPT_DIR/runtime/collector.log"',
+            'LOGFILE="$SCRIPT_DIR/runtime/collector.log"',
             "set -a",
             f'source "$SCRIPT_DIR/{env_name}"',
             "set +a",
             f': "${{OTELCOL_BIN:={collector_bin}}}"',
             'MODE="${1:-foreground}"',
             'case "$MODE" in',
-            "  --daemon)",
-            '    mkdir -p "$(dirname "$LOGFILE")"',
-            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
-            '      echo "collector already running (pid $(cat "$PIDFILE")); use --stop first" >&2; exit 1',
-            "    fi",
-            "    # setsid detaches from the controlling terminal; nohup blocks HUP when the parent dies.",
-            "    # Without both, a Collector started from an agent shell becomes <defunct> the moment the shell exits.",
-            f'    ( cd "$SCRIPT_DIR" && setsid nohup "${{OTELCOL_BIN}}" --config "$SCRIPT_DIR/{collector_name}" >>"$LOGFILE" 2>&1 < /dev/null & echo $! >"$PIDFILE" )',
-            "    sleep 0.5",
-            '    if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
-            '      echo "collector daemonised (pid $(cat "$PIDFILE"), log $LOGFILE)"',
-            "    else",
-            '      echo "collector failed to start; see $LOGFILE" >&2',
-            '      rm -f "$PIDFILE"; exit 1',
-            "    fi",
-            "    ;;",
-            "  --stop)",
-            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
-            '      PID=$(cat "$PIDFILE")',
-            '      kill "$PID"',
-            "      # Wait up to 5 seconds for graceful exit, then escalate to SIGKILL.",
-            '      for i in 1 2 3 4 5; do kill -0 "$PID" 2>/dev/null || break; sleep 1; done',
-            '      if kill -0 "$PID" 2>/dev/null; then',
-            '        echo "collector did not exit after SIGTERM; sending SIGKILL" >&2',
-            '        kill -9 "$PID" 2>/dev/null || true',
-            "      fi",
-            '      rm -f "$PIDFILE"; echo "collector stopped"',
-            "    else",
-            '      echo "no running collector pidfile" >&2; rm -f "$PIDFILE"; exit 1',
-            "    fi",
-            "    ;;",
-            "  --status)",
-            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
-            '      echo "running (pid $(cat "$PIDFILE"))"',
-            "    else",
-            '      echo "not running"; rm -f "$PIDFILE"; exit 1',
-            "    fi",
-            "    ;;",
+            *_build_daemon_case_blocks("collector", daemon_start, '"$PIDFILE"', '"$LOGFILE"'),
             "  *)",
             f'    exec "${{OTELCOL_BIN}}" --config "$SCRIPT_DIR/{collector_name}"',
             "    ;;",
@@ -331,6 +346,10 @@ def build_bridge_run_script(*, bridge_path: Path, env_path: Path) -> str:
     """Launcher for the OTLP HTTP bridge. Same daemon contract as the Collector launcher."""
     bridge_name = bridge_path.name
     env_name = env_path.name
+    daemon_start = (
+        f'( cd "$SCRIPT_DIR" && setsid nohup python3 "$SCRIPT_DIR/{bridge_name}" '
+        '>>"$LOGFILE" 2>&1 < /dev/null & echo $! >"$PIDFILE" )'
+    )
     return "\n".join(
         [
             "#!/usr/bin/env bash",
@@ -339,47 +358,13 @@ def build_bridge_run_script(*, bridge_path: Path, env_path: Path) -> str:
             "set -euo pipefail",
             'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
             f'PIDFILE="$SCRIPT_DIR/.{bridge_name}.pid"',
-            f'LOGFILE="$SCRIPT_DIR/runtime/bridge.log"',
+            'LOGFILE="$SCRIPT_DIR/runtime/bridge.log"',
             "set -a",
             f'source "$SCRIPT_DIR/{env_name}"',
             "set +a",
             'MODE="${1:-foreground}"',
             'case "$MODE" in',
-            "  --daemon)",
-            '    mkdir -p "$(dirname "$LOGFILE")"',
-            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
-            '      echo "bridge already running (pid $(cat "$PIDFILE")); use --stop first" >&2; exit 1',
-            "    fi",
-            f'    ( cd "$SCRIPT_DIR" && setsid nohup python3 "$SCRIPT_DIR/{bridge_name}" >>"$LOGFILE" 2>&1 < /dev/null & echo $! >"$PIDFILE" )',
-            "    sleep 0.5",
-            '    if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
-            '      echo "bridge daemonised (pid $(cat "$PIDFILE"), log $LOGFILE)"',
-            "    else",
-            '      echo "bridge failed to start; see $LOGFILE" >&2',
-            '      rm -f "$PIDFILE"; exit 1',
-            "    fi",
-            "    ;;",
-            "  --stop)",
-            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
-            '      PID=$(cat "$PIDFILE")',
-            '      kill "$PID"',
-            '      for i in 1 2 3 4 5; do kill -0 "$PID" 2>/dev/null || break; sleep 1; done',
-            '      if kill -0 "$PID" 2>/dev/null; then',
-            '        echo "bridge did not exit after SIGTERM; sending SIGKILL" >&2',
-            '        kill -9 "$PID" 2>/dev/null || true',
-            "      fi",
-            '      rm -f "$PIDFILE"; echo "bridge stopped"',
-            "    else",
-            '      echo "no running bridge pidfile" >&2; rm -f "$PIDFILE"; exit 1',
-            "    fi",
-            "    ;;",
-            "  --status)",
-            '    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then',
-            '      echo "running (pid $(cat "$PIDFILE"))"',
-            "    else",
-            '      echo "not running"; rm -f "$PIDFILE"; exit 1',
-            "    fi",
-            "    ;;",
+            *_build_daemon_case_blocks("bridge", daemon_start, '"$PIDFILE"', '"$LOGFILE"'),
             "  *)",
             f'    exec python3 "$SCRIPT_DIR/{bridge_name}"',
             "    ;;",
