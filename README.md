@@ -73,6 +73,10 @@ OTel GenAI Semantic Conventions v1.40+ standard fields are used directly. Extens
 | `gen_ai.agent_ext.component_type` | extension |
 | `gen_ai.agent_ext.cost` | extension |
 | `gen_ai.agent_ext.retry_count` | extension |
+| `gen_ai.agent_ext.reasoning.*` | extension — decision trace (action, rationale, alternatives, confidence) |
+| `gen_ai.evaluation.*` | extension — eval results (evaluator, score, outcome, dimension) |
+| `gen_ai.feedback.*` | extension — user feedback (score, sentiment, comment) |
+| `gen_ai.guardrail.*` | extension — safety checks (action, category, rule_id) |
 
 Full dictionary: [`references/telemetry_schema.md`](references/telemetry_schema.md).
 
@@ -119,6 +123,8 @@ python scripts/cli.py <command> [options]
 #   doctor      Honest end-to-end pipeline diagnostic
 #   alert       Alert check with intelligent root-cause analysis
 #   cost        Model pricing, cost summary, and cost backfill
+#   eval        Run regression evaluators (+ LLM-as-Judge) against recent traces
+#   replay      Session replay — nested span tree with reasoning trace
 #   query       Pre-built ES query templates
 #   report      Generate a smoke/metrics report
 #   validate    Configuration drift detection
@@ -140,36 +146,101 @@ Auto-detected and instrumented via `quickstart` or `instrument_frameworks.py`:
 | OpenClaw | Node.js | ✓ | LLM proxy |
 | Mastra | Node.js | ✓ | Node bootstrap |
 
+## Evaluation & quality signals
+
+**7 regression evaluators** (`agent-obsv eval run`):
+
+| Evaluator | Dimension | What it checks |
+|-----------|-----------|----------------|
+| `latency_regression` | latency | P95 latency vs baseline |
+| `error_rate_regression` | quality | Error rate vs baseline |
+| `token_efficiency` | cost | Tokens per session vs baseline |
+| `cost_regression` | cost | USD cost per session vs baseline |
+| `tool_coverage` | quality | Fraction of known tools actually called |
+| `guardrail_block_rate` | safety | Guardrail block/redact rate |
+| `llm_judge` | quality | LLM-as-Judge via any OpenAI-compatible API |
+
+```bash
+# Rule-based evaluation
+agent-obsv eval run --es-url <url> --write-to-es
+
+# LLM-as-Judge (bring your own endpoint)
+agent-obsv eval run --es-url <url> --evaluators llm_judge \
+  --llm-judge-endpoint http://localhost:4000 --llm-judge-model gpt-4o-mini
+```
+
+**User feedback** — the OTLP HTTP bridge exposes `POST /v1/feedback`:
+
+```bash
+curl -X POST http://127.0.0.1:14319/v1/feedback \
+  -H 'Content-Type: application/json' \
+  -d '{"score": 1, "comment": "helpful", "trace_id": "abc", "session_id": "sess-1"}'
+```
+
+Feedback lands in the same data stream; Kibana shows sentiment distribution and score trend.
+
+## Session replay
+
+Reconstruct a nested span tree with reasoning trace and user feedback:
+
+```bash
+agent-obsv replay --es-url <url> --session-id <id>
+agent-obsv replay --es-url <url> --trace-id <id> --format json
+```
+
+Output includes decision rationale at each step:
+```
+✓ [10:00:00Z] agent.run (runtime) 1200ms
+  💭 decided=tool_call type=tool_selection conf=0.9 rejected=[web_search]
+  📝 DB has the data the user needs
+  ✓ [10:00:01Z] tool.query_db (tool) tool=query_db 800ms
+  👤 score=1 sentiment=positive
+```
+
+## Reasoning trace
+
+Record WHY the agent chose each action — not just what it did:
+
+```python
+from instrument_frameworks import traced_decision, emit_reasoning_span
+
+@traced_decision(action="tool_call", decision_type="tool_selection",
+                 rationale="User asked about weather", alternatives="web_search,cached")
+def call_weather_api(city): ...
+
+# Or standalone:
+emit_reasoning_span(action="delegate", decision_type="delegation",
+                    rationale="Task requires code expertise", confidence=0.85)
+```
+
+Fields: `gen_ai.agent_ext.reasoning.action`, `.alternatives`, `.rationale`, `.confidence`, `.decision_type`, `.step_index`.
+
 ## Commands
 
 ```bash
-# Unified CLI (preferred)
-python scripts/cli.py doctor --es-url <url>
-python scripts/cli.py alert --es-url <url> --time-range now-15m
-python scripts/cli.py cost summary --es-url <url> --time-range now-24h
+# Pipeline health (don't trust /healthz)
+agent-obsv doctor --es-url <url>
 
-# Direct script access (still works)
-python scripts/doctor.py --es-url <url>
-python scripts/alert_and_diagnose.py --es-url <url> --time-range now-15m
+# Alert + RCA (supports Slack/钉钉/飞书/企微 webhook templates)
+agent-obsv alert --es-url <url> --time-range now-15m
+agent-obsv alert --es-url <url> --alert-rules rules.json --webhook-url <url> --webhook-template slack
 
-# Alert with external rules + Slack notification
-python scripts/alert_and_diagnose.py --es-url <url> \
-  --alert-rules rules.json \
-  --webhook-url https://hooks.slack.com/... --webhook-template slack
+# Cost analysis (built-in price table: 30+ models)
+agent-obsv cost summary --es-url <url>
+agent-obsv cost enrich --es-url <url> --time-range now-7d
+agent-obsv cost prices
 
-# Cost analysis
-python scripts/model_pricing.py summary --es-url <url>
-python scripts/model_pricing.py enrich --es-url <url> --time-range now-7d
-python scripts/model_pricing.py prices  # show built-in price table
+# Evaluation
+agent-obsv eval run --es-url <url> --write-to-es
+agent-obsv eval list
 
-# Config drift detection
-python scripts/validate_state.py --es-url <url> --assets-dir generated/bootstrap/elasticsearch
+# Session replay
+agent-obsv replay --es-url <url> --session-id <id>
 
-# End-to-end canary
-python scripts/verify_pipeline.py --es-url <url> --otlp-http-endpoint http://127.0.0.1:14319
-
-# Uninstall
-python scripts/uninstall.py --es-url <url> --confirm
+# Other
+agent-obsv status --es-url <url>
+agent-obsv validate --es-url <url> --assets-dir generated/bootstrap/elasticsearch
+agent-obsv uninstall --es-url <url> --confirm
 ```
 
 ## Requirements

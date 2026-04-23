@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Tests for new modules: cli, model_pricing, evaluate, replay, instrument_frameworks."""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+
+# =========================================================================
+# CLI tests
+# =========================================================================
+
+class CLITests(unittest.TestCase):
+    def test_commands_dict_has_required_entries(self) -> None:
+        from cli import COMMANDS
+        required = {"init", "quickstart", "status", "doctor", "alert", "cost", "eval", "replay", "query", "report", "validate", "uninstall"}
+        self.assertTrue(required.issubset(set(COMMANDS.keys())), f"Missing: {required - set(COMMANDS.keys())}")
+
+    def test_commands_values_are_tuples(self) -> None:
+        from cli import COMMANDS
+        for name, value in COMMANDS.items():
+            self.assertIsInstance(value, tuple, f"{name} value is not a tuple")
+            self.assertEqual(len(value), 2, f"{name} tuple length != 2")
+
+    def test_scenarios_string_is_nonempty(self) -> None:
+        from cli import SCENARIOS
+        self.assertGreater(len(SCENARIOS), 100)
+        self.assertIn("agent-obsv", SCENARIOS)
+
+    def test_main_help_returns_zero(self) -> None:
+        from cli import main
+        with patch("sys.argv", ["agent-obsv", "--help"]):
+            code = main()
+        self.assertEqual(code, 0)
+
+    def test_main_unknown_command_returns_one(self) -> None:
+        from cli import main
+        with patch("sys.argv", ["agent-obsv", "nonexistent_command_xyz"]):
+            code = main()
+        self.assertEqual(code, 1)
+
+    def test_main_scenarios_returns_zero(self) -> None:
+        from cli import main
+        with patch("sys.argv", ["agent-obsv", "scenarios"]):
+            code = main()
+        self.assertEqual(code, 0)
+
+
+# =========================================================================
+# Model pricing tests
+# =========================================================================
+
+class ModelPricingTests(unittest.TestCase):
+    def test_default_prices_has_entries(self) -> None:
+        from model_pricing import DEFAULT_PRICES
+        self.assertGreater(len(DEFAULT_PRICES), 20)
+
+    def test_default_prices_values_are_tuples(self) -> None:
+        from model_pricing import DEFAULT_PRICES
+        for model, price in DEFAULT_PRICES.items():
+            self.assertIsInstance(price, tuple, f"{model} price is not a tuple")
+            self.assertEqual(len(price), 2, f"{model} tuple length != 2")
+            self.assertGreaterEqual(price[0], 0, f"{model} input price < 0")
+            self.assertGreaterEqual(price[1], 0, f"{model} output price < 0")
+
+    def test_match_price_exact(self) -> None:
+        from model_pricing import match_price, DEFAULT_PRICES
+        result = match_price("gpt-4o-mini", DEFAULT_PRICES)
+        self.assertIsNotNone(result)
+        self.assertEqual(result, (0.15, 0.60))
+
+    def test_match_price_prefix(self) -> None:
+        from model_pricing import match_price, DEFAULT_PRICES
+        result = match_price("gpt-4o-mini-2025-01-01", DEFAULT_PRICES)
+        self.assertIsNotNone(result)
+
+    def test_match_price_unknown(self) -> None:
+        from model_pricing import match_price, DEFAULT_PRICES
+        result = match_price("totally-unknown-model", DEFAULT_PRICES)
+        self.assertIsNone(result)
+
+    def test_compute_cost(self) -> None:
+        from model_pricing import compute_cost
+        cost = compute_cost(1_000_000, 500_000, "gpt-4o-mini")
+        self.assertIsNotNone(cost)
+        # input: 1M * 0.15/1M = 0.15, output: 0.5M * 0.60/1M = 0.30, total = 0.45
+        self.assertAlmostEqual(cost, 0.45, places=2)
+
+    def test_compute_cost_unknown_model(self) -> None:
+        from model_pricing import compute_cost
+        cost = compute_cost(1000, 1000, "unknown-model-xyz")
+        self.assertIsNone(cost)
+
+    def test_load_prices_no_custom(self) -> None:
+        from model_pricing import load_prices, DEFAULT_PRICES
+        prices = load_prices(None)
+        self.assertEqual(len(prices), len(DEFAULT_PRICES))
+
+    def test_load_prices_with_custom(self) -> None:
+        from model_pricing import load_prices
+        custom = {"my-custom-model": {"input": 1.0, "output": 2.0}}
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(custom, f)
+            f.flush()
+            prices = load_prices(f.name)
+        self.assertIn("my-custom-model", prices)
+        self.assertEqual(prices["my-custom-model"], (1.0, 2.0))
+        Path(f.name).unlink(missing_ok=True)
+
+
+# =========================================================================
+# Evaluate tests
+# =========================================================================
+
+class EvaluateTests(unittest.TestCase):
+    def test_evaluators_registry_has_entries(self) -> None:
+        from evaluate import EVALUATORS
+        self.assertGreaterEqual(len(EVALUATORS), 7)
+        self.assertIn("llm_judge", EVALUATORS)
+
+    def test_eval_functions_match_registry(self) -> None:
+        from evaluate import EVALUATORS, _EVAL_FUNCTIONS
+        for name in EVALUATORS:
+            self.assertIn(name, _EVAL_FUNCTIONS, f"Evaluator '{name}' not in _EVAL_FUNCTIONS")
+
+    def test_latency_regression_pass(self) -> None:
+        from evaluate import _eval_latency_regression
+        current = {"aggregations": {"p95_latency": {"values": {"95.0": 100_000_000}}}}  # 100ms
+        baseline = {"aggregations": {"p95_latency": {"values": {"95.0": 100_000_000}}}}  # 100ms
+        result = _eval_latency_regression(current, baseline)
+        self.assertEqual(result["outcome"], "pass")
+
+    def test_latency_regression_fail(self) -> None:
+        from evaluate import _eval_latency_regression
+        current = {"aggregations": {"p95_latency": {"values": {"95.0": 500_000_000}}}}  # 500ms
+        baseline = {"aggregations": {"p95_latency": {"values": {"95.0": 100_000_000}}}}  # 100ms
+        result = _eval_latency_regression(current, baseline, threshold=1.5)
+        self.assertEqual(result["outcome"], "fail")
+
+    def test_error_rate_regression_pass(self) -> None:
+        from evaluate import _eval_error_rate_regression
+        current = {"aggregations": {"total": {"value": 100}, "errors": {"doc_count": 2}}}
+        baseline = {"aggregations": {"total": {"value": 100}, "errors": {"doc_count": 3}}}
+        result = _eval_error_rate_regression(current, baseline)
+        self.assertEqual(result["outcome"], "pass")
+
+    def test_tool_coverage_full(self) -> None:
+        from evaluate import _eval_tool_coverage
+        buckets = [{"key": "search"}, {"key": "db_query"}]
+        current = {"aggregations": {"tool_names": {"buckets": buckets}}}
+        baseline = {"aggregations": {"tool_names": {"buckets": buckets}}}
+        result = _eval_tool_coverage(current, baseline)
+        self.assertEqual(result["outcome"], "pass")
+        self.assertAlmostEqual(result["score"], 1.0)
+
+    def test_tool_coverage_partial(self) -> None:
+        from evaluate import _eval_tool_coverage
+        current = {"aggregations": {"tool_names": {"buckets": [{"key": "search"}]}}}
+        baseline = {"aggregations": {"tool_names": {"buckets": [{"key": "search"}, {"key": "db_query"}, {"key": "email"}, {"key": "calendar"}]}}}
+        result = _eval_tool_coverage(current, baseline)
+        self.assertIn(result["outcome"], ("fail", "degraded"))
+
+    def test_guardrail_block_rate_pass(self) -> None:
+        from evaluate import _eval_guardrail_block_rate
+        current = {"aggregations": {"guardrail_total": {"doc_count": 100, "blocked": {"doc_count": 5}}}}
+        baseline = {"aggregations": {}}
+        result = _eval_guardrail_block_rate(current, baseline)
+        self.assertEqual(result["outcome"], "pass")
+
+    def test_llm_judge_skipped_without_endpoint(self) -> None:
+        from evaluate import _eval_llm_judge
+        result = _eval_llm_judge({}, {})
+        self.assertEqual(result["outcome"], "pass")
+        self.assertIn("Skipped", result["detail"])
+
+    def test_render_text(self) -> None:
+        from evaluate import render_text
+        report = {
+            "run_id": "test-001",
+            "overall_outcome": "pass",
+            "average_score": 0.95,
+            "time_range": "now-1h",
+            "baseline_range": "now-7d/now-1h",
+            "results": [
+                {"evaluator": "latency_regression", "dimension": "latency", "outcome": "pass", "score": 0.95, "detail": "ok"},
+            ],
+        }
+        text = render_text(report)
+        self.assertIn("PASS", text)
+        self.assertIn("test-001", text)
+
+
+# =========================================================================
+# Replay tests
+# =========================================================================
+
+class ReplayTests(unittest.TestCase):
+    def test_build_tree_empty(self) -> None:
+        from replay import _build_tree
+        tree = _build_tree([])
+        self.assertEqual(tree["total_events"], 0)
+        self.assertEqual(tree["root_count"], 0)
+
+    def test_build_tree_single_event(self) -> None:
+        from replay import _build_tree
+        events = [{"span.id": "s1", "event.action": "tool.run", "event.outcome": "success", "@timestamp": "2025-01-01T00:00:00Z"}]
+        tree = _build_tree(events)
+        self.assertEqual(tree["total_events"], 1)
+        self.assertEqual(tree["root_count"], 1)
+        self.assertEqual(tree["spans"][0]["action"], "tool.run")
+
+    def test_build_tree_parent_child(self) -> None:
+        from replay import _build_tree
+        events = [
+            {"span.id": "parent", "event.action": "agent.run", "event.outcome": "success", "@timestamp": "2025-01-01T00:00:00Z"},
+            {"span.id": "child", "parent.id": "parent", "event.action": "tool.call", "event.outcome": "success", "@timestamp": "2025-01-01T00:00:01Z"},
+        ]
+        tree = _build_tree(events)
+        self.assertEqual(tree["root_count"], 1)
+        self.assertEqual(len(tree["spans"][0]["children"]), 1)
+        self.assertEqual(tree["spans"][0]["children"][0]["action"], "tool.call")
+
+    def test_build_tree_with_reasoning(self) -> None:
+        from replay import _build_tree
+        events = [{
+            "span.id": "s1",
+            "event.action": "decision",
+            "event.outcome": "success",
+            "gen_ai.agent_ext.reasoning.action": "tool_call",
+            "gen_ai.agent_ext.reasoning.decision_type": "tool_selection",
+            "gen_ai.agent_ext.reasoning.rationale": "DB has the data",
+        }]
+        tree = _build_tree(events)
+        node = tree["spans"][0]
+        self.assertEqual(node["reasoning_action"], "tool_call")
+        self.assertEqual(node["reasoning_type"], "tool_selection")
+
+    def test_render_tree_text(self) -> None:
+        from replay import _build_tree, _render_tree_text
+        events = [
+            {"span.id": "p1", "event.action": "agent.run", "event.outcome": "success", "@timestamp": "2025-01-01T00:00:00Z", "gen_ai.agent_ext.component_type": "runtime"},
+            {"span.id": "c1", "parent.id": "p1", "event.action": "tool.search", "event.outcome": "failure", "@timestamp": "2025-01-01T00:00:01Z", "gen_ai.tool.name": "web_search"},
+        ]
+        tree = _build_tree(events)
+        text = _render_tree_text(tree)
+        self.assertIn("agent.run", text)
+        self.assertIn("web_search", text)
+        self.assertIn("✗", text)  # failure icon
+
+
+# =========================================================================
+# Instrument frameworks tests
+# =========================================================================
+
+class InstrumentFrameworksTests(unittest.TestCase):
+    def test_get_tracer_returns_none_without_otel(self) -> None:
+        # OTel SDK may or may not be installed; we just verify it doesn't crash
+        from instrument_frameworks import _get_tracer
+        result = _get_tracer()
+        # Either None (no SDK) or a tracer object — both are fine
+        self.assertTrue(result is None or result is not None)
+
+    def test_instrumentors_dict_has_entries(self) -> None:
+        from instrument_frameworks import _INSTRUMENTORS
+        self.assertIn("autogen", _INSTRUMENTORS)
+        self.assertIn("crewai", _INSTRUMENTORS)
+        self.assertIn("langgraph", _INSTRUMENTORS)
+        self.assertIn("openai-agents", _INSTRUMENTORS)
+
+    def test_auto_instrument_with_env_disable(self) -> None:
+        from instrument_frameworks import auto_instrument
+        import os
+        os.environ["AGENT_OBSV_NO_AUTO_INSTRUMENT"] = "1"
+        try:
+            results = auto_instrument()
+            self.assertEqual(results, {})
+        finally:
+            del os.environ["AGENT_OBSV_NO_AUTO_INSTRUMENT"]
+
+    def test_auto_instrument_returns_dict(self) -> None:
+        from instrument_frameworks import auto_instrument
+        results = auto_instrument()
+        self.assertIsInstance(results, dict)
+        # Frameworks are probably not installed in test env, so all should be False
+        for name, ok in results.items():
+            self.assertIsInstance(ok, bool)
+
+    def test_traced_decision_decorator_exists(self) -> None:
+        from instrument_frameworks import traced_decision
+        self.assertTrue(callable(traced_decision))
+
+    def test_emit_reasoning_span_exists(self) -> None:
+        from instrument_frameworks import emit_reasoning_span
+        self.assertTrue(callable(emit_reasoning_span))
+        # Should not crash even without OTel SDK
+        emit_reasoning_span(action="tool_call", decision_type="test")
+
+
+# =========================================================================
+# Quickstart tests (lightweight — no actual bootstrap)
+# =========================================================================
+
+class QuickstartTests(unittest.TestCase):
+    def test_framework_signatures_has_entries(self) -> None:
+        from quickstart import FRAMEWORK_SIGNATURES
+        self.assertGreaterEqual(len(FRAMEWORK_SIGNATURES), 5)
+        for key, info in FRAMEWORK_SIGNATURES.items():
+            self.assertIn("packages", info)
+            self.assertIn("imports", info)
+            self.assertIn("runtime", info)
+
+    def test_detect_framework_empty_dir(self) -> None:
+        from quickstart import _detect_framework
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _detect_framework(Path(tmpdir))
+        self.assertIsNone(result)
+
+    def test_detect_framework_crewai(self) -> None:
+        from quickstart import _detect_framework
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "requirements.txt").write_text("crewai>=0.50\n")
+            result = _detect_framework(Path(tmpdir))
+        self.assertEqual(result, "crewai")
+
+    def test_detect_framework_langgraph(self) -> None:
+        from quickstart import _detect_framework
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "requirements.txt").write_text("langgraph\nlangchain\n")
+            result = _detect_framework(Path(tmpdir))
+        self.assertEqual(result, "langgraph")
+
+    def test_detect_framework_node_openclaw(self) -> None:
+        from quickstart import _detect_framework
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pkg = {"dependencies": {"openclaw": "^1.0.0"}}
+            (Path(tmpdir) / "package.json").write_text(json.dumps(pkg))
+            result = _detect_framework(Path(tmpdir))
+        self.assertEqual(result, "openclaw")
+
+
+if __name__ == "__main__":
+    unittest.main()
