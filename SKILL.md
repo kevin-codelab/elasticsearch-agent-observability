@@ -9,6 +9,27 @@ description: "Use this skill when a user wants to set up Elasticsearch as the ba
 
 不是完整可观测平台。只管 ES 后端的 data layer。
 
+## Install as a Skill
+
+```bash
+# Clone into your skills directory (remove .git to avoid nested repo issues)
+git clone https://github.com/kevin0x5/elasticsearch-agent-observability.git /path/to/skills/elasticsearch-agent-observability
+rm -rf /path/to/skills/elasticsearch-agent-observability/.git
+```
+
+Or if the skill is already cloned as a nested git repo:
+
+```bash
+# Fix: flatten it into a plain directory
+cd /path/to/skills/elasticsearch-agent-observability
+rm -rf .git
+cd /path/to/your/workspace
+git rm --cached skills/elasticsearch-agent-observability  # remove submodule pointer
+git add skills/elasticsearch-agent-observability           # re-add as plain files
+```
+
+After install, the skill is ready. The agent reads this `SKILL.md` and knows what to do.
+
 ## Trigger Conditions
 
 - "给这个 agent 建可观测能力"
