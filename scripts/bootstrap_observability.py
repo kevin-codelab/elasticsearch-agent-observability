@@ -856,6 +856,12 @@ def main() -> int:
             notes.append("Use `run-collector.sh` to start the Collector and `agent-otel.env` as the runtime env template for the agent process.")
         if bridge_run_path and bridge_env_path:
             notes.append("Use `run-otlphttpbridge.sh` plus `agent-otel-bridge.env` when you need a logs/traces-only fallback that bypasses the Collector Elasticsearch exporter.")
+            if credentials and not args.embed_es_credentials:
+                notes.append(
+                    "⚠️  IMPORTANT: `agent-otel-bridge.env` has empty ELASTICSEARCH_USERNAME/PASSWORD placeholders. "
+                    "Fill them in BEFORE starting the bridge, otherwise the bridge will get 401 from ES and data will be lost. "
+                    "The bridge now checks credentials at startup and will refuse to start if ES returns 401."
+                )
         if instrument_snippet_path:
             snippet_runtime_label = _instrument_snippet_runtime_label(instrument_snippet_path)
             notes.append(

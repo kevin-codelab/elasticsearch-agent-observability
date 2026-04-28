@@ -471,7 +471,57 @@ class OTLPBridgeHandler(BaseHTTPRequestHandler):
             self._write_json(500, {{"error": str(exc)}})
 
 
+def _preflight_check() -> None:
+    \"\"\"Fail-fast check before serving. Catches the most common first-run errors.\"\"\"
+    # 1. Credential check — probe ES to detect 401 early.
+    probe_url = f"{{ES_URL.rstrip('/')}}/"
+    probe_req = request.Request(probe_url, method="GET")
+    probe_req.add_header("Content-Type", "application/json")
+    username = os.environ.get("ELASTICSEARCH_USERNAME", "").strip()
+    password = os.environ.get("ELASTICSEARCH_PASSWORD", "").strip()
+    if username:
+        token = base64.b64encode(f"{{username}}:{{password}}".encode("utf-8")).decode("ascii")
+        probe_req.add_header("Authorization", f"Basic {{token}}")
+    try:
+        with request.urlopen(probe_req, timeout=10, context=_es_request_context()) as resp:
+            _ = resp.read()
+        print(f"[preflight] ES reachable at {{ES_URL}} (auth ok)")
+    except error.HTTPError as exc:
+        if exc.code == 401:
+            if not username:
+                print(
+                    f"\\n❌ [preflight] Elasticsearch at {{ES_URL}} requires authentication, "
+                    f"but ELASTICSEARCH_USERNAME is empty.\\n"
+                    f"\\n"
+                    f"Fix: edit agent-otel-bridge.env and fill in ELASTICSEARCH_USERNAME and ELASTICSEARCH_PASSWORD,\\n"
+                    f"     then restart the bridge.\\n",
+                    file=__import__('sys').stderr,
+                )
+            else:
+                print(
+                    f"\\n❌ [preflight] Elasticsearch at {{ES_URL}} returned 401 — credentials are wrong.\\n"
+                    f"   ELASTICSEARCH_USERNAME={{username}}\\n"
+                    f"\\n"
+                    f"Fix: check the password in agent-otel-bridge.env, then restart.\\n",
+                    file=__import__('sys').stderr,
+                )
+            raise SystemExit(1)
+        elif exc.code == 403:
+            print(f"[preflight] ES returned 403 — user '{{username}}' may lack write permissions, but bridge will start anyway.")
+        else:
+            print(f"[preflight] ES returned HTTP {{exc.code}} — starting anyway, will retry on each request.")
+    except error.URLError as exc:
+        print(
+            f"\\n❌ [preflight] Cannot reach Elasticsearch at {{ES_URL}}: {{exc.reason}}\\n"
+            f"\\n"
+            f"Fix: check ES_URL in the bridge script or agent-otel-bridge.env, then restart.\\n",
+            file=__import__('sys').stderr,
+        )
+        raise SystemExit(1)
+
+
 def main() -> int:
+    _preflight_check()
     server = BridgeServer((BRIDGE_HOST, BRIDGE_PORT), OTLPBridgeHandler)
     print(f"OTLP HTTP bridge listening on http://{{BRIDGE_HOST}}:{{BRIDGE_PORT}} -> {{ES_URL.rstrip('/')}}/{{EVENTS_DATA_STREAM}}")
     server.serve_forever()
