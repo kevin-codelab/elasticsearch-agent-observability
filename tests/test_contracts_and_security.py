@@ -228,11 +228,13 @@ class ContractsAndSecurityTests(unittest.TestCase):
         for obj in lens_objects:
             state = obj["attributes"]["state"]
             self.assertIn("datasourceStates", state)
-            self.assertIn("indexpattern", state["datasourceStates"])
+            self.assertTrue(
+                "formBased" in state["datasourceStates"] or "indexpattern" in state["datasourceStates"],
+                "Lens state must have 'formBased' (9.x) or 'indexpattern' (8.x) datasource",
+            )
             self.assertIn("visualization", state)
             self.assertIn("filters", state)
             self.assertIn("query", state)
-            self.assertNotIn("formBased", state["datasourceStates"])
             references = {ref["name"] for ref in obj["references"]}
             self.assertIn("indexpattern-datasource-current-indexpattern", references)
             self.assertIn("indexpattern-datasource-layer-layer1", references)

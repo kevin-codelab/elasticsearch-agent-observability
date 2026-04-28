@@ -483,12 +483,19 @@ DEFAULT_LENS_LAYER_ID = "layer1"
 _LENS_CURRENT_REF = "indexpattern-datasource-current-indexpattern"
 _LENS_LAYER_REF_PREFIX = "indexpattern-datasource-layer-"
 
+# Kibana 9.x renamed the Lens datasource from "indexpattern" to "formBased".
+# Using "formBased" here so panels render on 9.x. Kibana 8.14+ also accepts
+# "formBased" (it was introduced as an alias in 8.x before becoming the only
+# name in 9.x). If you need to support Kibana < 8.14, change this back to
+# "indexpattern".
+_LENS_DATASOURCE_KEY = "formBased"
+
 
 def _build_lens_state(*, columns: dict[str, Any], column_order: list[str], visualization: dict[str, Any], layer_id: str = DEFAULT_LENS_LAYER_ID, query: str = "") -> dict[str, Any]:
     return {
         "adHocDataViews": {},
         "datasourceStates": {
-            "indexpattern": {
+            _LENS_DATASOURCE_KEY: {
                 "currentIndexPatternId": _LENS_CURRENT_REF,
                 "layers": {
                     layer_id: {
