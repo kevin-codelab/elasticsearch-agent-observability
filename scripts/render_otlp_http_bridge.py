@@ -23,6 +23,7 @@ import base64
 import json
 import os
 import ssl
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -34,6 +35,13 @@ BRIDGE_HOST = {bind_host!r}
 BRIDGE_PORT = {bind_port}
 VERIFY_TLS = {verify_tls_literal}
 MAX_BODY_SIZE = 50 * 1024 * 1024  # 50 MB — reject oversized payloads to prevent DoS
+MAX_BULK_RETRIES = 2
+BRIDGE_STATS = {{
+    "accepted": 0,
+    "failed": 0,
+    "last_success_at": None,
+    "last_error": None,
+}}
 
 # Sensitive GenAI fields that should be stripped before writing to ES.
 # The ingest pipeline also removes these, but defence-in-depth is safer.
@@ -354,6 +362,28 @@ def _post_document(document: dict[str, Any]) -> None:
     _post_documents([document])
 
 
+def _mark_bulk_success(count: int) -> None:
+    BRIDGE_STATS["accepted"] += count
+    BRIDGE_STATS["last_success_at"] = _now_iso()
+    BRIDGE_STATS["last_error"] = None
+
+
+def _mark_bulk_failure(count: int, message: str) -> None:
+    BRIDGE_STATS["failed"] += count
+    BRIDGE_STATS["last_error"] = message[:500]
+
+
+def _build_bulk_request(endpoint: str, payload: bytes):
+    req = request.Request(endpoint, data=payload, method="POST")
+    req.add_header("Content-Type", "application/x-ndjson")
+    username = os.environ.get("ELASTICSEARCH_USERNAME", "").strip()
+    if username:
+        password = os.environ.get("ELASTICSEARCH_PASSWORD", "")
+        token = base64.b64encode(f"{{username}}:{{password}}".encode("utf-8")).decode("ascii")
+        req.add_header("Authorization", f"Basic {{token}}")
+    return req
+
+
 def _post_documents(documents: list[dict[str, Any]]) -> None:
     if not documents:
         return
@@ -363,20 +393,34 @@ def _post_documents(documents: list[dict[str, Any]]) -> None:
         lines.append(json.dumps({{"create": {{}}}}, separators=(",", ":")))
         lines.append(json.dumps(doc, ensure_ascii=False))
     payload = ("\\n".join(lines) + "\\n").encode("utf-8")
-    req = request.Request(endpoint, data=payload, method="POST")
-    req.add_header("Content-Type", "application/x-ndjson")
-    username = os.environ.get("ELASTICSEARCH_USERNAME", "").strip()
-    if username:
-        password = os.environ.get("ELASTICSEARCH_PASSWORD", "")
-        token = base64.b64encode(f"{{username}}:{{password}}".encode("utf-8")).decode("ascii")
-        req.add_header("Authorization", f"Basic {{token}}")
-    try:
-        with request.urlopen(req, timeout=30, context=_es_request_context()) as response:
-            if response.status not in {{200, 201}}:
-                raise RuntimeError(f"Elasticsearch _bulk returned unexpected status {{response.status}}")
-    except error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Elasticsearch _bulk failed: HTTP {{exc.code}} {{body}}") from exc
+    last_error = ""
+    for attempt in range(MAX_BULK_RETRIES + 1):
+        req = _build_bulk_request(endpoint, payload)
+        try:
+            with request.urlopen(req, timeout=30, context=_es_request_context()) as response:
+                body = response.read().decode("utf-8", errors="replace")
+                if response.status not in {{200, 201}}:
+                    raise RuntimeError(f"Elasticsearch _bulk returned unexpected status {{response.status}}")
+                try:
+                    result = json.loads(body) if body else {{}}
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(f"Elasticsearch _bulk returned invalid JSON: {{body[:200]}}") from exc
+                if result.get("errors"):
+                    failed_items = [item for item in result.get("items", []) if (item.get("create") or {{}}).get("error")]
+                    raise RuntimeError(f"Elasticsearch _bulk had item errors: {{failed_items[:3]}}")
+                _mark_bulk_success(len(documents))
+                return
+        except error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            last_error = f"HTTP {{exc.code}} {{body}}"
+            retryable = exc.code in {{429, 500, 502, 503, 504}}
+        except (error.URLError, TimeoutError, OSError, RuntimeError) as exc:
+            last_error = str(exc)
+            retryable = True
+        if not retryable or attempt >= MAX_BULK_RETRIES:
+            _mark_bulk_failure(len(documents), last_error)
+            raise RuntimeError(f"Elasticsearch _bulk failed after {{attempt + 1}} attempt(s): {{last_error}}")
+        time.sleep(0.25 * (2 ** attempt))
 
 
 class OTLPBridgeHandler(BaseHTTPRequestHandler):
@@ -395,7 +439,7 @@ class OTLPBridgeHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path.split("?", 1)[0] == "/healthz":
-            self._write_json(200, {{"status": "ok", "events_data_stream": EVENTS_DATA_STREAM}})
+            self._write_json(200, {{"status": "ok", "events_data_stream": EVENTS_DATA_STREAM, "stats": BRIDGE_STATS}})
             return
         self._write_json(404, {{"error": "not found"}})
 

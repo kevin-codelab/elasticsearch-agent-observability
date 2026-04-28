@@ -32,9 +32,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
+import sys
 from pathlib import Path
+from typing import Any
 
-from common import SkillError, ensure_dir, print_error, write_text
+from common import SkillError, ensure_dir, print_error, write_json, write_text
 
 
 _SESSION_TAIL_SCRIPT = '''\
@@ -551,6 +554,174 @@ _DEFAULT_FIELD_MAP = {
 }
 
 
+_SUGGESTION_RULES: dict[str, dict[str, Any]] = {
+    "session": {
+        "target": "gen_ai.conversation.id",
+        "candidates": ["session_id", "conversation_id", "thread_id", "session.id", "conversation.id"],
+    },
+    "turn": {
+        "target": "gen_ai.agent_ext.turn_id",
+        "candidates": ["turn_id", "turn.id", "step_id", "message_id"],
+    },
+    "model": {
+        "target": "gen_ai.request.model",
+        "candidates": ["model", "model_name", "request.model", "llm.model", "metadata.model"],
+    },
+    "provider": {
+        "target": "gen_ai.provider.name",
+        "candidates": ["provider", "provider_name", "system", "llm.provider"],
+    },
+    "input_tokens": {
+        "target": "gen_ai.usage.input_tokens",
+        "candidates": ["input_tokens", "prompt_tokens", "usage.input_tokens", "usage.prompt_tokens"],
+    },
+    "output_tokens": {
+        "target": "gen_ai.usage.output_tokens",
+        "candidates": ["output_tokens", "completion_tokens", "usage.output_tokens", "usage.completion_tokens"],
+    },
+    "cache_read": {
+        "target": "gen_ai.usage.cache_read.input_tokens",
+        "candidates": ["cache_read_input_tokens", "cached_input_tokens", "usage.cache_read_input_tokens", "usage.cached_input_tokens"],
+    },
+    "latency": {
+        "target": "gen_ai.agent_ext.latency_ms",
+        "candidates": ["latency_ms", "duration_ms", "duration", "elapsed_ms", "timing.duration_ms"],
+    },
+    "tool": {
+        "target": "gen_ai.tool.name",
+        "candidates": ["tool_name", "tool.name", "function.name", "function_name", "tool"],
+    },
+    "operation": {
+        "target": "gen_ai.operation.name",
+        "candidates": ["operation", "operation_name", "type", "role", "event.action"],
+    },
+    "error": {
+        "target": "error.type",
+        "candidates": ["error_type", "error", "exception.type", "status"],
+    },
+    "mcp": {
+        "target": "mcp.method.name",
+        "candidates": ["mcp_method", "mcp_method_name", "mcp.method.name", "mcp.method"],
+    },
+}
+
+
+def _discover_session_files(session_dir: Path, pattern: str, max_files: int) -> list[Path]:
+    if not session_dir.exists():
+        return []
+    files = sorted(path for path in session_dir.glob(pattern) if path.is_file())
+    if not files and "**" not in pattern:
+        files = sorted(path for path in session_dir.rglob(pattern) if path.is_file())
+    return files[:max_files]
+
+
+def _flatten_keys(value: Any, prefix: str = "", output: set[str] | None = None) -> set[str]:
+    keys = output if output is not None else set()
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            child = f"{prefix}.{key}" if prefix else str(key)
+            keys.add(child)
+            _flatten_keys(nested, child, keys)
+    return keys
+
+
+def _sample_jsonl_records(files: list[Path], sample_size: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    records: list[dict[str, Any]] = []
+    field_counts: dict[str, int] = {}
+    for path in files:
+        try:
+            handle = path.open("r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with handle:
+            for line in handle:
+                if len(records) >= sample_size:
+                    return records, field_counts
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    record = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                records.append(record)
+                for field in _flatten_keys(record):
+                    field_counts[field] = field_counts.get(field, 0) + 1
+    return records, field_counts
+
+
+def _suggest_field_map(field_counts: dict[str, int]) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    suggested: dict[str, str] = {}
+    coverage: dict[str, dict[str, Any]] = {}
+    fields = set(field_counts)
+    for category, rule in _SUGGESTION_RULES.items():
+        matches = [candidate for candidate in rule["candidates"] if candidate in fields]
+        if matches:
+            suggested[matches[0]] = rule["target"]
+        coverage[category] = {
+            "status": "ok" if matches else "missing",
+            "target": rule["target"],
+            "matched_fields": matches,
+            "candidate_fields": rule["candidates"],
+        }
+    if coverage["input_tokens"]["status"] == "ok" or coverage["output_tokens"]["status"] == "ok":
+        token_status = "ok" if coverage["input_tokens"]["status"] == "ok" and coverage["output_tokens"]["status"] == "ok" else "partial"
+    else:
+        token_status = "missing"
+    coverage["tokens"] = {
+        "status": token_status,
+        "target": "gen_ai.usage.*",
+        "matched_fields": sorted(set(coverage["input_tokens"]["matched_fields"] + coverage["output_tokens"]["matched_fields"])),
+        "candidate_fields": sorted(set(coverage["input_tokens"]["candidate_fields"] + coverage["output_tokens"]["candidate_fields"])),
+    }
+    return suggested, coverage
+
+
+def inspect_session_files(
+    *,
+    session_dir: Path,
+    session_glob: str = "*.jsonl",
+    sample_size: int = 200,
+    max_files: int = 20,
+) -> dict[str, Any]:
+    files = _discover_session_files(session_dir, session_glob, max_files)
+    records, field_counts = _sample_jsonl_records(files, sample_size)
+    suggested, coverage = _suggest_field_map(field_counts)
+    return {
+        "session_dir": str(session_dir),
+        "session_glob": session_glob,
+        "sampled_files": [str(path) for path in files],
+        "sampled_file_count": len(files),
+        "sampled_record_count": len(records),
+        "detected_fields": [
+            {"field": field, "count": count}
+            for field, count in sorted(field_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "suggested_field_map": suggested,
+        "coverage": coverage,
+    }
+
+
+def render_inspect_text(result: dict[str, Any]) -> str:
+    lines = [
+        f"Session dir: {result['session_dir']}",
+        f"Sampled: {result['sampled_record_count']} record(s) from {result['sampled_file_count']} file(s)",
+        "",
+        "Coverage:",
+    ]
+    for key in ("session", "model", "tokens", "tool", "latency", "error", "mcp"):
+        item = result["coverage"].get(key, {})
+        matched = ", ".join(item.get("matched_fields") or []) or "-"
+        lines.append(f"  {key}: {item.get('status', 'missing')} ({matched})")
+    if result["suggested_field_map"]:
+        lines.extend(["", "Suggested field_map:"])
+        for src, dst in sorted(result["suggested_field_map"].items()):
+            lines.append(f"  {src} -> {dst}")
+    return "\n".join(lines)
+
+
 _README = """\
 # Session Tail — JSONL file → OTLP bridge
 
@@ -682,19 +853,66 @@ def render_session_tail_bundle(
     }
 
 
-def parse_args() -> argparse.Namespace:
+def _build_generate_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate a session JSONL tail → OTLP bridge script")
     parser.add_argument("--output-dir", required=True, help="Target directory for the session-tail bundle")
     parser.add_argument("--bridge-url", default="http://localhost:14319", help="OTLP HTTP bridge URL")
     parser.add_argument("--session-dir", default="./sessions", help="Default directory for JSONL session files")
     parser.add_argument("--session-glob", default="*.jsonl", help="Glob pattern for session files")
     parser.add_argument("--service-name", default="agent-runtime", help="OTel service name")
-    return parser.parse_args()
+    return parser
+
+
+def _build_inspect_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Inspect session JSONL files and suggest a field_map")
+    parser.add_argument("--session-dir", required=True, help="Directory containing JSONL session files")
+    parser.add_argument("--session-glob", default="*.jsonl", help="Glob pattern for session files")
+    parser.add_argument("--output-dir", default="", help="Optional directory for session-tail-inspect.json and field_map.suggested.json")
+    parser.add_argument("--sample-size", type=int, default=200, help="Maximum JSONL records to sample")
+    parser.add_argument("--max-files", type=int, default=20, help="Maximum files to sample")
+    parser.add_argument("--output-format", choices=["text", "json"], default="text")
+    return parser
+
+
+def parse_args() -> argparse.Namespace:
+    if len(sys.argv) > 1 and sys.argv[1] == "inspect":
+        args = _build_inspect_parser().parse_args(sys.argv[2:])
+        args.command = "inspect"
+        return args
+    args = _build_generate_parser().parse_args()
+    args.command = "generate"
+    return args
 
 
 def main() -> int:
     try:
         args = parse_args()
+        if args.command == "inspect":
+            result = inspect_session_files(
+                session_dir=Path(args.session_dir).expanduser().resolve(),
+                session_glob=args.session_glob,
+                sample_size=args.sample_size,
+                max_files=args.max_files,
+            )
+            if args.output_dir:
+                output_dir = ensure_dir(Path(args.output_dir).expanduser().resolve())
+                inspect_path = output_dir / "session-tail-inspect.json"
+                field_map_path = output_dir / "field_map.suggested.json"
+                result["output_paths"] = {
+                    "inspect": str(inspect_path),
+                    "field_map": str(field_map_path),
+                }
+                write_json(inspect_path, result)
+                write_json(field_map_path, result["suggested_field_map"])
+            if args.output_format == "json":
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+            else:
+                print(render_inspect_text(result))
+                if result.get("output_paths"):
+                    print(f"\nWrote: {result['output_paths']['inspect']}")
+                    print(f"Wrote: {result['output_paths']['field_map']}")
+            return 0
+
         paths = render_session_tail_bundle(
             Path(args.output_dir).expanduser().resolve(),
             bridge_url=args.bridge_url,

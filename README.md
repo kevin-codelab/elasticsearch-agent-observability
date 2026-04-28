@@ -58,7 +58,7 @@ Then verify the path end to end:
 python scripts/cli.py doctor --es-url http://localhost:9200
 ```
 
-`doctor` does not trust `/healthz` alone. It checks listeners, recent ES data, canary ingestion, mappings, Kibana assets, and missing GenAI fields.
+`doctor` does not trust `/healthz` alone. It checks listeners, recent ES data, canary ingestion, mappings, Kibana assets, missing GenAI fields, and reports a maturity ladder from L1 pipeline health to L4 quality signals.
 
 ## Choose the least invasive ingest path
 
@@ -73,6 +73,11 @@ python scripts/cli.py doctor --es-url http://localhost:9200
 Examples:
 
 ```bash
+# Inspect JSONL shape and write field_map.suggested.json
+python scripts/cli.py session-tail inspect \
+  --session-dir /path/to/agent/sessions \
+  --output-dir ./generated/session-tail
+
 # Session JSONL → OTLP bridge
 python scripts/cli.py session-tail \
   --output-dir ./generated/session-tail \
@@ -109,8 +114,8 @@ export OPENAI_API_BASE=http://localhost:4000/v1
 - Kibana Query Rule reference payloads
 - OTel Collector config and OTLP HTTP bridge fallback
 - Python / Node instrumentation starters
-- session-tail bundle and optional LiteLLM proxy bundle
-- detection evidence file explaining why quickstart chose a path
+- session-tail bundle, `session-tail inspect`, and optional LiteLLM proxy bundle
+- detection evidence file with a general ingest profile explaining why quickstart chose a path
 
 ## Main commands
 
@@ -122,8 +127,8 @@ python scripts/cli.py <command> [options]
 |---|---|
 | `quickstart` | detect a known framework, generate assets, and explain the choice |
 | `init` | generate/apply ES, Kibana, Collector, bridge, proxy, and instrumentation assets |
-| `doctor` | check whether telemetry is flowing and which fields are missing |
-| `session-tail` | generate a JSONL tailer for file-based agent sessions |
+| `doctor` | check whether telemetry is flowing, which fields are missing, and current maturity level |
+| `session-tail` | inspect JSONL fields and generate a tailer for file-based agent sessions |
 | `alert` | run field-based checks for error spikes, latency regressions, token anomalies, retry storms |
 | `eval` | write lightweight regression evaluation events into ES |
 | `replay` | render a session/trace tree from indexed spans |

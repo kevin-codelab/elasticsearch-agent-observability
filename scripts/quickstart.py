@@ -27,6 +27,7 @@ from common import (
 )
 
 DETECTION_EVIDENCE_FILENAME = "quickstart-detection.json"
+SESSION_FILE_PATTERNS = ("*.jsonl", "**/*.jsonl", "sessions/*.jsonl", "logs/*.jsonl")
 
 # Supported framework detection patterns.
 FRAMEWORK_SIGNATURES: dict[str, dict[str, Any]] = {
@@ -104,7 +105,7 @@ def _detect_framework_with_evidence(agent_dir: Path) -> dict[str, Any]:
                 for pkg in fw_info["packages"]:
                     if pkg.lower() in content:
                         _record(fw_key, "python-dependency", path, "package", pkg)
-                        return _build_detection_result(matches)
+                        return _build_detection_result(matches, agent_dir)
 
     # Check Node.js package.json
     pkg_json = agent_dir / "package.json"
@@ -117,7 +118,7 @@ def _detect_framework_with_evidence(agent_dir: Path) -> dict[str, Any]:
                 for pkg_name in fw_info["packages"]:
                     if pkg_name.lower() in dep_names:
                         _record(fw_key, "node-dependency", pkg_json, "package", pkg_name)
-                        return _build_detection_result(matches)
+                        return _build_detection_result(matches, agent_dir)
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -132,39 +133,142 @@ def _detect_framework_with_evidence(agent_dir: Path) -> dict[str, Any]:
             for imp in fw_info["imports"]:
                 if f"import {imp}" in content or f"from {imp}" in content:
                     _record(fw_key, "python-import", py_file, "import", imp)
-                    return _build_detection_result(matches)
+                    return _build_detection_result(matches, agent_dir)
 
-    return _build_detection_result(matches)
+    return _build_detection_result(matches, agent_dir)
 
 
-def _build_detection_result(matches: list[dict[str, str]]) -> dict[str, Any]:
+def _detect_project_signals(agent_dir: Path) -> dict[str, Any]:
+    session_candidates: list[str] = []
+    for pattern in SESSION_FILE_PATTERNS:
+        for path in agent_dir.glob(pattern):
+            if path.is_file():
+                rel = str(path.relative_to(agent_dir))
+                if rel not in session_candidates:
+                    session_candidates.append(rel)
+            if len(session_candidates) >= 5:
+                break
+        if len(session_candidates) >= 5:
+            break
+
+    package_json = agent_dir / "package.json"
+    package_deps: set[str] = set()
+    if package_json.is_file():
+        try:
+            pkg = json.loads(package_json.read_text(encoding="utf-8"))
+            package_deps = {str(key).lower() for key in {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}}
+        except (OSError, json.JSONDecodeError):
+            package_deps = set()
+
+    dependency_text = ""
+    for name in ("requirements.txt", "pyproject.toml", "setup.cfg", "Pipfile"):
+        path = agent_dir / name
+        if path.is_file():
+            try:
+                dependency_text += "\n" + path.read_text(encoding="utf-8").lower()
+            except OSError:
+                pass
+
+    otel_markers = {"opentelemetry", "@opentelemetry", "otel", "traceloop"}
+    openai_markers = {"openai", "litellm", "anthropic", "openai_api_base", "base_url"}
+    mcp_markers = {"mcp", "@modelcontextprotocol"}
+    languages = {
+        "node": package_json.is_file(),
+        "python": any((agent_dir / name).is_file() for name in ("requirements.txt", "pyproject.toml", "setup.py")) or bool(list(agent_dir.glob("*.py"))[:1]),
+    }
+    combined = "\n".join(sorted(package_deps)) + "\n" + dependency_text
+    return {
+        "session_jsonl_candidates": session_candidates,
+        "languages": [name for name, present in languages.items() if present],
+        "has_node": languages["node"],
+        "has_python": languages["python"],
+        "has_otel": any(marker in combined for marker in otel_markers),
+        "has_openai_compatible_hint": any(marker in combined for marker in openai_markers),
+        "has_mcp_hint": any(marker in combined for marker in mcp_markers),
+    }
+
+
+def _build_ingest_profile(agent_dir: Path, *, framework: str | None, runtime: str) -> dict[str, Any]:
+    signals = _detect_project_signals(agent_dir)
+    evidence: list[str] = []
+    alternatives: list[str] = []
+    risks: list[str] = []
+
+    if signals["session_jsonl_candidates"]:
+        recommended_path = "session-tail"
+        evidence.append(f"Found session JSONL candidates: {', '.join(signals['session_jsonl_candidates'][:3])}")
+        alternatives.extend(["collector-direct-otlp", "llm-proxy"])
+        risks.extend(["field coverage depends on JSONL shape", "reasoning/eval/feedback require active reporting"])
+    elif signals["has_otel"]:
+        recommended_path = "collector-direct-otlp"
+        evidence.append("Detected existing OTel/OpenTelemetry dependency or config")
+        alternatives.extend(["python-bootstrap", "node-preload"])
+        risks.append("GenAI semantic fields still depend on instrumentation coverage")
+    elif runtime == "node" or signals["has_node"]:
+        recommended_path = "node-preload-and-wrappers"
+        evidence.append("Detected Node/TypeScript project shape")
+        alternatives.extend(["session-tail", "llm-proxy"])
+        risks.append("preload captures HTTP; model/tool identity requires wrappers or existing attributes")
+    elif runtime == "python" or signals["has_python"]:
+        recommended_path = "python-bootstrap-and-wrappers"
+        evidence.append("Detected Python project shape")
+        alternatives.extend(["collector-direct-otlp", "llm-proxy"])
+        risks.append("custom tool/model calls need wrappers for Tier 2 fields")
+    else:
+        recommended_path = "generic-bootstrap"
+        evidence.append("No strong session/OTel/runtime signal detected")
+        alternatives.extend(["session-tail", "llm-proxy", "collector-direct-otlp"])
+        risks.append("run session-tail inspect or add OTel instrumentation to improve coverage")
+
+    if framework:
+        evidence.append(f"Framework detection selected `{framework}`")
+    if signals["has_openai_compatible_hint"] and "llm-proxy" not in alternatives and recommended_path != "llm-proxy":
+        alternatives.append("llm-proxy")
+    if signals["has_mcp_hint"]:
+        risks.append("MCP visibility depends on mcp.method.name / tool-name fields being emitted or mapped")
+
+    return {
+        "recommended_path": recommended_path,
+        "alternatives": sorted(set(alternatives)),
+        "evidence": evidence,
+        "risks": risks,
+        "signals": signals,
+    }
+
+
+def _build_detection_result(matches: list[dict[str, str]], agent_dir: Path | None = None) -> dict[str, Any]:
     if not matches:
-        return {
+        runtime = "python"
+        result = {
             "framework": None,
             "matches": [],
-            "recommended_runtime": "python",
+            "recommended_runtime": runtime,
             "recommended_path": "generic-bootstrap",
             "why": "No known framework signature matched dependency or import scans.",
         }
-    selected = matches[0]
-    framework = selected["framework"]
-    runtime = selected["runtime"]
-    if framework == "openclaw":
-        recommended_path = "session-tail-first"
-        why = "OpenClaw often has session JSONL or non-standard providers; session-tail is the least invasive first path."
-    elif runtime == "node":
-        recommended_path = "node-preload-and-wrappers"
-        why = "Detected a Node/TypeScript framework; use preload for HTTP spans and wrappers for GenAI semantic fields."
     else:
-        recommended_path = "python-bootstrap-and-wrappers"
-        why = "Detected a Python framework; use the generated bootstrap plus wrappers for tool/model call sites."
-    return {
-        "framework": framework,
-        "matches": matches,
-        "recommended_runtime": runtime,
-        "recommended_path": recommended_path,
-        "why": why,
-    }
+        selected = matches[0]
+        framework = selected["framework"]
+        runtime = selected["runtime"]
+        if framework == "openclaw":
+            recommended_path = "session-tail-first"
+            why = "OpenClaw often has session JSONL or non-standard providers; session-tail is the least invasive first path."
+        elif runtime == "node":
+            recommended_path = "node-preload-and-wrappers"
+            why = "Detected a Node/TypeScript framework; use preload for HTTP spans and wrappers for GenAI semantic fields."
+        else:
+            recommended_path = "python-bootstrap-and-wrappers"
+            why = "Detected a Python framework; use the generated bootstrap plus wrappers for tool/model call sites."
+        result = {
+            "framework": framework,
+            "matches": matches,
+            "recommended_runtime": runtime,
+            "recommended_path": recommended_path,
+            "why": why,
+        }
+    if agent_dir is not None:
+        result["ingest_profile"] = _build_ingest_profile(agent_dir, framework=result.get("framework"), runtime=result["recommended_runtime"])
+    return result
 
 
 def _detect_framework(agent_dir: Path) -> str | None:
@@ -215,6 +319,11 @@ def _print_detection_explanation(detection: dict[str, Any]) -> None:
             f"{match['source']} `{match['path']}` matched {match['match_type']} `{match['value']}`"
         )
     print(f"   recommended path: {detection.get('recommended_path')}")
+    profile = detection.get("ingest_profile") or {}
+    if profile:
+        print(f"   ingest profile: {profile.get('recommended_path')}")
+        for item in (profile.get("evidence") or [])[:3]:
+            print(f"   ingest evidence: {item}")
 
 
 def _generate_framework_guide(framework: str, output_dir: Path) -> Path:
@@ -560,7 +669,9 @@ def main() -> int:
             fw_info = FRAMEWORK_SIGNATURES.get(framework, {})
             print(f"📦 Framework: {fw_info.get('label', framework)}")
             runtime_hint = fw_info.get("runtime", "python")
+            detection["ingest_profile"] = _build_ingest_profile(agent_dir, framework=framework, runtime=runtime_hint)
             print(f"   why: user override via --framework; runtime path `{runtime_hint}`")
+            _print_detection_explanation(detection)
 
         ensure_dir(output_dir)
         detection_path = _persist_detection_evidence(output_dir, detection, selected_framework=framework, agent_dir=agent_dir)

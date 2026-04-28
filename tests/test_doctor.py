@@ -310,6 +310,28 @@ class DoctorTests(unittest.TestCase):
 
     # ----- probe: recent data filters internal datasets --------------------
 
+    def test_maturity_ladder_uses_instrumentation_coverage(self) -> None:
+        checks = {
+            "recent_data": {"status": "pass"},
+            "canary": {"status": "skipped"},
+            "instrumentation_coverage": {
+                "present": [
+                    {"field": "gen_ai.conversation.id"},
+                    {"field": "gen_ai.request.model"},
+                    {"field": "gen_ai.usage.input_tokens"},
+                    {"field": "gen_ai.tool.name"},
+                    {"field": "gen_ai.agent_ext.turn_id"},
+                ],
+                "missing": [],
+            },
+        }
+        maturity = doctor._build_maturity("healthy", checks)
+        self.assertEqual(maturity["level"], "L3")
+        self.assertEqual(maturity["pipeline"], "healthy")
+        self.assertEqual(maturity["basic_genai"]["status"], "partial")
+        self.assertEqual(maturity["workflow"]["status"], "partial")
+        self.assertIn("gen_ai.feedback.score", maturity["next_fields"])
+
     def test_recent_data_filters_internal_datasets(self) -> None:
         from common import ESConfig
 

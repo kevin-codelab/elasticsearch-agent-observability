@@ -487,6 +487,62 @@ def _probe_instrumentation_coverage(
 
 
 # ---------------------------------------------------------------------------
+# Maturity ladder
+# ---------------------------------------------------------------------------
+
+_MATURITY_GROUPS = {
+    "basic_genai": ["gen_ai.conversation.id", "gen_ai.request.model", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"],
+    "workflow": ["gen_ai.tool.name", "gen_ai.agent_ext.turn_id", "gen_ai.agent_ext.component_type", "mcp.method.name"],
+    "quality": ["gen_ai.evaluation.name", "gen_ai.feedback.score", "gen_ai.agent_ext.reasoning.action"],
+}
+
+
+def _coverage_group_status(present_fields: set[str], fields: list[str]) -> dict[str, Any]:
+    present = [field for field in fields if field in present_fields]
+    missing = [field for field in fields if field not in present_fields]
+    if len(present) == len(fields):
+        status = "ok"
+    elif present:
+        status = "partial" if len(present) >= max(1, len(fields) // 2) else "weak"
+    else:
+        status = "missing"
+    return {"status": status, "present": present, "missing": missing}
+
+
+def _build_maturity(verdict: str, checks: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    pipeline_ok = verdict in {"healthy", "degraded_collector_path", "degraded"} and checks.get("recent_data", {}).get("status") == "pass"
+    pipeline_status = "healthy" if verdict == "healthy" else ("usable" if pipeline_ok else "broken")
+    coverage = checks.get("instrumentation_coverage") or {}
+    present_fields = {item.get("field") for item in coverage.get("present", []) if item.get("field")}
+    groups = {
+        name: _coverage_group_status(present_fields, fields)
+        for name, fields in _MATURITY_GROUPS.items()
+    }
+
+    level = "L0"
+    if pipeline_ok:
+        level = "L1"
+    if groups["basic_genai"]["status"] in {"ok", "partial"}:
+        level = "L2"
+    if groups["workflow"]["status"] in {"ok", "partial"}:
+        level = "L3"
+    if groups["quality"]["status"] in {"ok", "partial"}:
+        level = "L4"
+
+    next_fields: list[str] = []
+    for group_name in ("basic_genai", "workflow", "quality"):
+        next_fields.extend(groups[group_name]["missing"])
+    return {
+        "level": level,
+        "pipeline": pipeline_status,
+        "basic_genai": groups["basic_genai"],
+        "workflow": groups["workflow"],
+        "quality": groups["quality"],
+        "next_fields": next_fields[:8],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Verdict aggregation
 # ---------------------------------------------------------------------------
 
@@ -629,6 +685,7 @@ def run_doctor(args: argparse.Namespace) -> dict[str, Any]:
         "otlp_http_endpoint": args.otlp_http_endpoint,
         "freshness_minutes": args.freshness_minutes,
         "checks": checks,
+        "maturity": _build_maturity(verdict, checks),
     }
 
 
@@ -645,6 +702,17 @@ def render_text(result: dict[str, Any]) -> str:
         f"[{verdict_icons.get(result['verdict'], '?')} {result['verdict'].upper()}] {result['summary']}",
         "",
     ]
+    maturity = result.get("maturity") or {}
+    if maturity:
+        lines.append(
+            f"  • maturity: {maturity.get('level')} "
+            f"(pipeline={maturity.get('pipeline')}, basic={maturity.get('basic_genai', {}).get('status')}, "
+            f"workflow={maturity.get('workflow', {}).get('status')}, quality={maturity.get('quality', {}).get('status')})"
+        )
+        if maturity.get("next_fields"):
+            lines.append(f"    next fields: {', '.join(maturity['next_fields'][:5])}")
+        lines.append("")
+
     for name, check in result["checks"].items():
         icon = icons.get(check.get("status"), "?")
         lines.append(f"  {icon} {name}: {check.get('detail', '')}")

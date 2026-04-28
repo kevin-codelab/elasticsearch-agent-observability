@@ -357,6 +357,21 @@ class QuickstartTests(unittest.TestCase):
         self.assertEqual(evidence["selected_framework"], "crewai")
         self.assertEqual(evidence["matches"][0]["path"], "requirements.txt")
         self.assertEqual(evidence["recommended_path"], "python-bootstrap-and-wrappers")
+        self.assertEqual(evidence["ingest_profile"]["recommended_path"], "python-bootstrap-and-wrappers")
+        self.assertIn("risks", evidence["ingest_profile"])
+
+    def test_ingest_profile_prefers_session_jsonl_when_present(self) -> None:
+        from quickstart import _detect_framework_with_evidence
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "package.json").write_text(json.dumps({"dependencies": {"@mastra/core": "latest"}}), encoding="utf-8")
+            sessions = root / "sessions"
+            sessions.mkdir()
+            (sessions / "s1.jsonl").write_text('{"session_id":"s1","model":"gpt-4o"}\n', encoding="utf-8")
+            result = _detect_framework_with_evidence(root)
+        self.assertEqual(result["ingest_profile"]["recommended_path"], "session-tail")
+        self.assertTrue(result["ingest_profile"]["signals"]["session_jsonl_candidates"])
+        self.assertIn("field coverage depends on JSONL shape", result["ingest_profile"]["risks"])
 
 
 # =========================================================================
@@ -364,6 +379,32 @@ class QuickstartTests(unittest.TestCase):
 # =========================================================================
 
 class SessionTailRendererTests(unittest.TestCase):
+    def test_inspect_session_files_suggests_field_map_and_coverage(self) -> None:
+        import render_session_tail
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sessions = Path(tmpdir) / "sessions"
+            sessions.mkdir()
+            (sessions / "s1.jsonl").write_text(
+                json.dumps({
+                    "session_id": "s1",
+                    "model": "gpt-4o",
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 4},
+                    "tool": {"name": "search"},
+                    "duration_ms": 123,
+                    "mcp": {"method": "tools/call"},
+                }) + "\n",
+                encoding="utf-8",
+            )
+            result = render_session_tail.inspect_session_files(session_dir=sessions)
+
+        self.assertEqual(result["sampled_record_count"], 1)
+        self.assertEqual(result["suggested_field_map"]["session_id"], "gen_ai.conversation.id")
+        self.assertEqual(result["suggested_field_map"]["usage.prompt_tokens"], "gen_ai.usage.input_tokens")
+        self.assertEqual(result["suggested_field_map"]["tool.name"], "gen_ai.tool.name")
+        self.assertEqual(result["coverage"]["tokens"]["status"], "ok")
+        self.assertEqual(result["coverage"]["mcp"]["status"], "ok")
+
     def test_generated_session_tail_preserves_timestamps_and_persists_offsets(self) -> None:
         import py_compile
         import render_session_tail

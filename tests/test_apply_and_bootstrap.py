@@ -282,6 +282,9 @@ class ApplyAndBootstrapTests(unittest.TestCase):
         self.assertIn("EVENTS_DATA_STREAM = 'agent-obsv-events'", script)
         self.assertIn('BRIDGE_PORT = 14319', script)
         self.assertIn('OTLP protobuf payloads require', script)
+        self.assertIn('BRIDGE_STATS', script)
+        self.assertIn('MAX_BULK_RETRIES', script)
+        self.assertIn('Elasticsearch _bulk had item errors', script)
         compile(script, "rendered-bridge", "exec")
 
     def test_rendered_bridge_redacts_sensitive_attribute_aliases(self) -> None:
