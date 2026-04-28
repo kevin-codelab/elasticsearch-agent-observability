@@ -231,69 +231,12 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
             {"set": {"field": "observer.type", "value": "agent-observability"}},
             {"set": {"field": "labels.recommended_modules", "value": modules}},
             {"set": {"field": "@timestamp", "value": "{{{_ingest.timestamp}}}", "override": False}},
-            # --- ECS event defaults ---
             {"set": {"field": "event.kind", "value": "event", "override": False}},
             {"set": {"field": "event.category", "value": "process", "override": False}},
-            # --- field normalization: map common non-standard names to canonical fields ---
-            # Different agent frameworks emit fields under varying names. This processor
-            # normalises them so dashboards and alerts work regardless of which SDK the
-            # agent uses. Only fills the canonical field if it is not already set.
-            {
-                "script": {
-                    "lang": "painless",
-                    "source": (
-                        # latency: latency_ms / duration_ms / latency → gen_ai.agent_ext.latency_ms
-                        "def lat = ctx['latency_ms'] ?: ctx['duration_ms'] ?: ctx['latency']; "
-                        "if (lat != null && ctx['gen_ai.agent_ext.latency_ms'] == null) { ctx['gen_ai.agent_ext.latency_ms'] = lat; } "
-                        # tool name: tool_name / tool → gen_ai.tool.name
-                        "def tn = ctx['tool_name'] ?: ctx['tool']; "
-                        "if (tn != null && ctx['gen_ai.tool.name'] == null) { ctx['gen_ai.tool.name'] = tn; } "
-                        # model: model / model_name → gen_ai.request.model
-                        "def mn = ctx['model'] ?: ctx['model_name']; "
-                        "if (mn != null && ctx['gen_ai.request.model'] == null) { ctx['gen_ai.request.model'] = mn; } "
-                        # session: session_id / conversation_id → gen_ai.conversation.id
-                        "def sid = ctx['session_id'] ?: ctx['conversation_id']; "
-                        "if (sid != null && ctx['gen_ai.conversation.id'] == null) { ctx['gen_ai.conversation.id'] = sid; } "
-                        # agent id/name
-                        "def aid = ctx['agent_id']; if (aid != null && ctx['gen_ai.agent.id'] == null) { ctx['gen_ai.agent.id'] = aid; } "
-                        "def anm = ctx['agent_name']; if (anm != null && ctx['gen_ai.agent.name'] == null) { ctx['gen_ai.agent.name'] = anm; } "
-                        # tokens: input_tokens / prompt_tokens → gen_ai.usage.input_tokens
-                        "def it = ctx['input_tokens'] ?: ctx['prompt_tokens']; "
-                        "if (it != null && ctx['gen_ai.usage.input_tokens'] == null) { ctx['gen_ai.usage.input_tokens'] = it; } "
-                        "def ot = ctx['output_tokens'] ?: ctx['completion_tokens']; "
-                        "if (ot != null && ctx['gen_ai.usage.output_tokens'] == null) { ctx['gen_ai.usage.output_tokens'] = ot; } "
-                        # outcome: status / success → event.outcome
-                        "if (ctx.event?.outcome == null) { "
-                        "  def st = ctx['status']; "
-                        "  if (st instanceof String) { "
-                        "    String sl = st.toLowerCase(); "
-                        "    if (sl.equals('success') || sl.equals('ok') || sl.equals('pass')) { ctx.event = ctx.event ?: new HashMap(); ctx.event.outcome = 'success'; } "
-                        "    else if (sl.equals('failure') || sl.equals('fail') || sl.equals('error')) { ctx.event = ctx.event ?: new HashMap(); ctx.event.outcome = 'failure'; } "
-                        "  } "
-                        "  def sc = ctx['success']; "
-                        "  if (sc instanceof Boolean) { ctx.event = ctx.event ?: new HashMap(); ctx.event.outcome = sc ? 'success' : 'failure'; } "
-                        "}"
-                    ),
-                    "ignore_failure": True,
-                }
-            },
-            # --- compute event.duration from latency_ms if present ---
-            {
-                "script": {
-                    "lang": "painless",
-                    "source": "if (ctx.gen_ai?.agent_ext?.latency_ms != null && ctx.event?.duration == null) { ctx.event = ctx.event ?: new HashMap(); ctx.event.duration = (long)(ctx.gen_ai.agent_ext.latency_ms * 1000000L); }",
-                    "ignore_failure": True,
-                }
-            },
-            # --- compute event.outcome ---
-            {
-                "script": {
-                    "lang": "painless",
-                    "source": "if (ctx.event?.outcome == null) { ctx.event = ctx.event ?: new HashMap(); ctx.event.outcome = (ctx.error?.type != null) ? 'failure' : 'success'; }",
-                    "ignore_failure": True,
-                }
-            },
             # --- structured log parsing (JSON body) ---
+            # MUST run before field normalization so that fields inside a JSON
+            # message body (e.g. {"latency_ms":120, "tool_name":"search"}) are
+            # flattened to top-level before the normalizer looks for them.
             {"json": {"field": "message", "target_field": "_parsed_message", "ignore_failure": True}},
             {
                 "script": {
@@ -351,9 +294,69 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
                     "ignore_failure": True,
                 }
             },
-            # --- redact sensitive GenAI payloads ---
-            # Use both remove (clears nested path) and script (clears flat dotted keys).
-            # After the flatten pass above, sensitive values may live as flat dotted keys.
+            # --- field normalization + derived fields (single script) ---
+            # Consolidated into one Painless script to reduce compilation overhead.
+            # Runs AFTER JSON body parsing so fields from message body are visible.
+            #
+            # Does three things in order:
+            #   1. Map common non-standard field names → canonical schema
+            #   2. Derive event.duration from latency_ms (ms → ns)
+            #   3. Derive event.outcome from status/success/error.type
+            {
+                "script": {
+                    "lang": "painless",
+                    "source": (
+                        # --- 1. field normalization ---
+                        # latency
+                        "def lat = ctx['latency_ms'] ?: ctx['duration_ms'] ?: ctx['latency']; "
+                        "if (lat != null && ctx['gen_ai.agent_ext.latency_ms'] == null) { ctx['gen_ai.agent_ext.latency_ms'] = lat; } "
+                        # tool name
+                        "def tn = ctx['tool_name'] ?: ctx['tool']; "
+                        "if (tn != null && ctx['gen_ai.tool.name'] == null) { ctx['gen_ai.tool.name'] = tn; } "
+                        # model
+                        "def mn = ctx['model'] ?: ctx['model_name']; "
+                        "if (mn != null && ctx['gen_ai.request.model'] == null) { ctx['gen_ai.request.model'] = mn; } "
+                        # session
+                        "def sid = ctx['session_id'] ?: ctx['conversation_id']; "
+                        "if (sid != null && ctx['gen_ai.conversation.id'] == null) { ctx['gen_ai.conversation.id'] = sid; } "
+                        # agent
+                        "def aid = ctx['agent_id']; if (aid != null && ctx['gen_ai.agent.id'] == null) { ctx['gen_ai.agent.id'] = aid; } "
+                        "def anm = ctx['agent_name']; if (anm != null && ctx['gen_ai.agent.name'] == null) { ctx['gen_ai.agent.name'] = anm; } "
+                        # tokens
+                        "def it = ctx['input_tokens'] ?: ctx['prompt_tokens']; "
+                        "if (it != null && ctx['gen_ai.usage.input_tokens'] == null) { ctx['gen_ai.usage.input_tokens'] = it; } "
+                        "def ot = ctx['output_tokens'] ?: ctx['completion_tokens']; "
+                        "if (ot != null && ctx['gen_ai.usage.output_tokens'] == null) { ctx['gen_ai.usage.output_tokens'] = ot; } "
+                        # --- 2. latency_ms → event.duration (ms → nanoseconds) ---
+                        "if (ctx['gen_ai.agent_ext.latency_ms'] != null && ctx.event?.duration == null) { "
+                        "  ctx.event = ctx.event ?: new HashMap(); "
+                        "  ctx.event.duration = (long)(ctx['gen_ai.agent_ext.latency_ms'] * 1000000L); "
+                        "} "
+                        # --- 3. event.outcome derivation (unified) ---
+                        "if (ctx.event?.outcome == null) { "
+                        "  ctx.event = ctx.event ?: new HashMap(); "
+                        # Try status string first
+                        "  def st = ctx['status']; "
+                        "  if (st instanceof String) { "
+                        "    String sl = st.toLowerCase(); "
+                        "    if (sl.equals('success') || sl.equals('ok') || sl.equals('pass')) { ctx.event.outcome = 'success'; } "
+                        "    else if (sl.equals('failure') || sl.equals('fail') || sl.equals('error')) { ctx.event.outcome = 'failure'; } "
+                        "  } "
+                        # Try boolean success
+                        "  if (ctx.event.outcome == null) { "
+                        "    def sc = ctx['success']; "
+                        "    if (sc instanceof Boolean) { ctx.event.outcome = sc ? 'success' : 'failure'; } "
+                        "  } "
+                        # Fallback: error.type presence
+                        "  if (ctx.event.outcome == null) { "
+                        "    ctx.event.outcome = (ctx.error?.type != null) ? 'failure' : 'success'; "
+                        "  } "
+                        "}"
+                    ),
+                    "ignore_failure": True,
+                }
+            },
+            # --- redact sensitive GenAI payloads + PII governance (single script) ---
             {"remove": {"field": "gen_ai.prompt", "ignore_missing": True}},
             {"remove": {"field": "gen_ai.completion", "ignore_missing": True}},
             {"remove": {"field": "gen_ai.tool.call.arguments", "ignore_missing": True}},
@@ -362,21 +365,11 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
                 "script": {
                     "lang": "painless",
                     "source": (
+                        # Remove flat dotted sensitive keys
                         "def sensitive = ['gen_ai.prompt', 'gen_ai.completion', "
                         "'gen_ai.tool.call.arguments', 'gen_ai.tool.call.result']; "
-                        "for (String f : sensitive) { ctx.remove(f); }"
-                    ),
-                    "ignore_failure": True,
-                }
-            },
-            # --- reasoning trace PII governance ---
-            # Truncate rationale and input_summary to prevent unbounded PII leakage.
-            # Defence-in-depth: even if the agent accidentally writes raw prompts
-            # into reasoning fields, only the first N chars survive ingest.
-            {
-                "script": {
-                    "lang": "painless",
-                    "source": (
+                        "for (String f : sensitive) { ctx.remove(f); } "
+                        # Truncate reasoning trace fields to prevent PII leakage
                         "int MAX_RATIONALE = 500; "
                         "int MAX_INPUT_SUMMARY = 300; "
                         "def r = ctx['gen_ai.agent_ext.reasoning.rationale']; "
