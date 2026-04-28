@@ -98,19 +98,33 @@ def _ecs_base_properties() -> dict[str, Any]:
         "labels.payload_truncated": {"type": "boolean"},
         # --- gen_ai (OpenTelemetry GenAI Semantic Conventions v1.40+) ---
         "gen_ai.system": {"type": "keyword"},
+        "gen_ai.provider.name": {"type": "keyword"},
         "gen_ai.request.model": {"type": "keyword"},
         "gen_ai.response.model": {"type": "keyword"},
+        "gen_ai.response.id": {"type": "keyword"},
+        "gen_ai.response.finish_reasons": {"type": "keyword"},
+        "gen_ai.output.type": {"type": "keyword"},
         "gen_ai.operation.name": {"type": "keyword"},
+        "gen_ai.data_source.id": {"type": "keyword"},
         "gen_ai.usage.input_tokens": {"type": "long"},
         "gen_ai.usage.output_tokens": {"type": "long"},
         "gen_ai.usage.total_tokens": {"type": "long"},
+        "gen_ai.usage.cache_read.input_tokens": {"type": "long"},
+        "gen_ai.usage.cache_creation.input_tokens": {"type": "long"},
+        "gen_ai.token.type": {"type": "keyword"},
         # --- gen_ai OTel standard: agent + tool + conversation ---
         "gen_ai.agent.id": {"type": "keyword"},
         "gen_ai.agent.name": {"type": "keyword"},
         "gen_ai.agent.version": {"type": "keyword"},
+        "gen_ai.agent.description": {"type": "text"},
         "gen_ai.conversation.id": {"type": "keyword"},
+        "gen_ai.prompt.name": {"type": "keyword"},
         "gen_ai.tool.name": {"type": "keyword"},
         "gen_ai.tool.call.id": {"type": "keyword"},
+        # --- Model Context Protocol (OTel MCP semantic conventions) ---
+        "mcp.method.name": {"type": "keyword"},
+        "mcp.session.id": {"type": "keyword"},
+        "mcp.resource.uri": {"type": "keyword"},
         "error.type": {"type": "keyword"},
         # --- agent_ext: project extensions awaiting OTel SemConv proposal ---
         "gen_ai.agent_ext.turn_id": {"type": "keyword"},
@@ -137,6 +151,7 @@ def _ecs_base_properties() -> dict[str, Any]:
         "gen_ai.evaluation.score": {"type": "float"},
         "gen_ai.evaluation.outcome": {"type": "keyword"},  # pass / fail / degraded
         "gen_ai.evaluation.dimension": {"type": "keyword"},  # quality / safety / latency / efficiency
+        "gen_ai.evaluation.name": {"type": "keyword"},
         # --- multi-agent correlation ---
         "gen_ai.agent_ext.parent_agent.id": {"type": "keyword"},
         "gen_ai.agent_ext.causality.trigger_span_id": {"type": "keyword"},
@@ -243,7 +258,7 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
                     "source": (
                         "def known_roots = new HashSet(['@timestamp', 'message', 'event', 'service', "
                         "'agent', 'trace', 'span', 'parent', 'transaction', 'observer', 'host', "
-                        "'labels', 'gen_ai', 'error', 'log']); "
+                        "'labels', 'gen_ai', 'mcp', 'alert', 'otel', 'error', 'log']); "
                         "if (ctx._parsed_message instanceof Map) { "
                         "  Map pm = (Map) ctx._parsed_message; "
                         "  for (def e0 : pm.entrySet()) { "
@@ -312,20 +327,45 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
                         # tool name
                         "def tn = ctx['tool_name'] ?: ctx['tool']; "
                         "if (tn != null && ctx['gen_ai.tool.name'] == null) { ctx['gen_ai.tool.name'] = tn; } "
-                        # model
+                        # provider / model / response
+                        "def pn = ctx['provider'] ?: ctx['provider_name'] ?: ctx['gen_ai.system']; "
+                        "if (pn != null && ctx['gen_ai.provider.name'] == null) { ctx['gen_ai.provider.name'] = pn; } "
                         "def mn = ctx['model'] ?: ctx['model_name']; "
                         "if (mn != null && ctx['gen_ai.request.model'] == null) { ctx['gen_ai.request.model'] = mn; } "
+                        "def rm = ctx['response_model'] ?: ctx['actual_model']; "
+                        "if (rm != null && ctx['gen_ai.response.model'] == null) { ctx['gen_ai.response.model'] = rm; } "
+                        "def rid = ctx['response_id'] ?: ctx['completion_id']; "
+                        "if (rid != null && ctx['gen_ai.response.id'] == null) { ctx['gen_ai.response.id'] = rid; } "
+                        "def fr = ctx['finish_reason'] ?: ctx['finish_reasons']; "
+                        "if (fr != null && ctx['gen_ai.response.finish_reasons'] == null) { ctx['gen_ai.response.finish_reasons'] = fr; } "
+                        "def otpe = ctx['output_type'] ?: ctx['response_type']; "
+                        "if (otpe != null && ctx['gen_ai.output.type'] == null) { ctx['gen_ai.output.type'] = otpe; } "
                         # session
-                        "def sid = ctx['session_id'] ?: ctx['conversation_id']; "
+                        "def sid = ctx['session_id'] ?: ctx['conversation_id'] ?: ctx['thread_id']; "
                         "if (sid != null && ctx['gen_ai.conversation.id'] == null) { ctx['gen_ai.conversation.id'] = sid; } "
                         # agent
-                        "def aid = ctx['agent_id']; if (aid != null && ctx['gen_ai.agent.id'] == null) { ctx['gen_ai.agent.id'] = aid; } "
+                        "def aid = ctx['agent_id'] ?: ctx['run_id']; if (aid != null && ctx['gen_ai.agent.id'] == null) { ctx['gen_ai.agent.id'] = aid; } "
                         "def anm = ctx['agent_name']; if (anm != null && ctx['gen_ai.agent.name'] == null) { ctx['gen_ai.agent.name'] = anm; } "
+                        "def ads = ctx['agent_description']; if (ads != null && ctx['gen_ai.agent.description'] == null) { ctx['gen_ai.agent.description'] = ads; } "
                         # tokens
                         "def it = ctx['input_tokens'] ?: ctx['prompt_tokens']; "
                         "if (it != null && ctx['gen_ai.usage.input_tokens'] == null) { ctx['gen_ai.usage.input_tokens'] = it; } "
                         "def ot = ctx['output_tokens'] ?: ctx['completion_tokens']; "
                         "if (ot != null && ctx['gen_ai.usage.output_tokens'] == null) { ctx['gen_ai.usage.output_tokens'] = ot; } "
+                        "def tt = ctx['total_tokens']; if (tt != null && ctx['gen_ai.usage.total_tokens'] == null) { ctx['gen_ai.usage.total_tokens'] = tt; } "
+                        "def crt = ctx['cache_read_input_tokens'] ?: ctx['cached_input_tokens']; "
+                        "if (crt != null && ctx['gen_ai.usage.cache_read.input_tokens'] == null) { ctx['gen_ai.usage.cache_read.input_tokens'] = crt; } "
+                        "def cct = ctx['cache_creation_input_tokens']; "
+                        "if (cct != null && ctx['gen_ai.usage.cache_creation.input_tokens'] == null) { ctx['gen_ai.usage.cache_creation.input_tokens'] = cct; } "
+                        # retrieval / MCP
+                        "def dsid = ctx['data_source_id'] ?: ctx['knowledge_source']; "
+                        "if (dsid != null && ctx['gen_ai.data_source.id'] == null) { ctx['gen_ai.data_source.id'] = dsid; } "
+                        "def mpn = ctx['prompt_name']; if (mpn != null && ctx['gen_ai.prompt.name'] == null) { ctx['gen_ai.prompt.name'] = mpn; } "
+                        "def mmn = ctx['mcp_method'] ?: ctx['mcp_method_name']; "
+                        "if (mmn != null && ctx['mcp.method.name'] == null) { ctx['mcp.method.name'] = mmn; } "
+                        "def msid = ctx['mcp_session_id']; if (msid != null && ctx['mcp.session.id'] == null) { ctx['mcp.session.id'] = msid; } "
+                        "def muri = ctx['mcp_resource_uri'] ?: ctx['resource_uri']; "
+                        "if (muri != null && ctx['mcp.resource.uri'] == null) { ctx['mcp.resource.uri'] = muri; } "
                         # --- 2. latency_ms → event.duration (ms → nanoseconds) ---
                         "if (ctx['gen_ai.agent_ext.latency_ms'] != null && ctx.event?.duration == null) { "
                         "  ctx.event = ctx.event ?: new HashMap(); "
@@ -358,8 +398,18 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
             # --- redact sensitive GenAI payloads + PII governance (single script) ---
             {"remove": {"field": "gen_ai.prompt", "ignore_missing": True}},
             {"remove": {"field": "gen_ai.completion", "ignore_missing": True}},
+            {"remove": {"field": "gen_ai.input.messages", "ignore_missing": True}},
+            {"remove": {"field": "gen_ai.output.messages", "ignore_missing": True}},
+            {"remove": {"field": "gen_ai.system_instructions", "ignore_missing": True}},
+            {"remove": {"field": "gen_ai.tool.definitions", "ignore_missing": True}},
             {"remove": {"field": "gen_ai.tool.call.arguments", "ignore_missing": True}},
             {"remove": {"field": "gen_ai.tool.call.result", "ignore_missing": True}},
+            {"remove": {"field": "prompt", "ignore_missing": True}},
+            {"remove": {"field": "completion", "ignore_missing": True}},
+            {"remove": {"field": "messages", "ignore_missing": True}},
+            {"remove": {"field": "system_prompt", "ignore_missing": True}},
+            {"remove": {"field": "tool_args", "ignore_missing": True}},
+            {"remove": {"field": "tool_result", "ignore_missing": True}},
             {
                 "script": {
                     "lang": "painless",
@@ -382,6 +432,17 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
                         "def c = ctx['gen_ai.feedback.comment']; "
                         "if (c instanceof String && c.length() > 1000) { "
                         "  ctx['gen_ai.feedback.comment'] = c.substring(0, 1000) + '... [truncated]'; "
+                        "} "
+                        "def msg = ctx.message; "
+                        "if (msg instanceof String) { "
+                        "  String ml = msg.toLowerCase(); "
+                        "  if ((ml.contains('gen_ai.prompt') || ml.contains('gen_ai.completion') || "
+                        "       ml.contains('gen_ai.input.messages') || ml.contains('gen_ai.output.messages') || "
+                        "       ml.contains('gen_ai.tool.call.arguments') || ml.contains('gen_ai.tool.call.result')) && ml.length() > 80) { "
+                        "    ctx.message = '[redacted sensitive GenAI payload]'; "
+                        "    ctx.labels = ctx.labels ?: new HashMap(); "
+                        "    ctx.labels.payload_truncated = true; "
+                        "  } "
                         "}"
                     ),
                     "ignore_failure": True,
@@ -859,6 +920,7 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
     failure_search_id = f"{index_prefix}-event-failures"
     session_search_id = f"{index_prefix}-session-drilldown"
     trace_timeline_id = f"{index_prefix}-trace-timeline"
+    mcp_search_id = f"{index_prefix}-mcp-tool-calls"
     dashboard_id = f"{index_prefix}-overview"
 
     # --- IDs for all lens panels ---
@@ -950,6 +1012,18 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
                 "gen_ai.agent_ext.reasoning.rationale",
             ],
             query="trace.id:*",
+        ),
+        build_search_saved_object(
+            object_id=mcp_search_id,
+            title="MCP tool calls",
+            description="MCP-first Discover entry. Filter by method, tool, session, and outcome.",
+            data_view_id=data_view_id,
+            columns=[
+                "@timestamp", "mcp.method.name", "gen_ai.tool.name", "mcp.session.id",
+                "gen_ai.conversation.id", "gen_ai.agent_ext.latency_ms", "event.outcome",
+                "error.type", "trace.id", "span.id",
+            ],
+            query="mcp.method.name:* or gen_ai.agent_ext.component_type:mcp",
         ),
         # =====================================================================
         # KPI metric panels (row 1: 4 small cards)
@@ -1283,6 +1357,8 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
             "saved_search_id": saved_search_id,
             "failure_search_id": failure_search_id,
             "session_search_id": session_search_id,
+            "trace_timeline_id": trace_timeline_id,
+            "mcp_search_id": mcp_search_id,
             "dashboard_id": dashboard_id,
             "lens_ids": [
                 kpi_event_count_id,
@@ -1320,6 +1396,114 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
 
 
 # ---------------------------------------------------------------------------
+# Elastic-native investigation packs
+# ---------------------------------------------------------------------------
+
+def build_investigation_queries(index_prefix: str) -> dict[str, Any]:
+    ds_name = build_data_stream_name(index_prefix)
+    return {
+        "product": "elasticsearch-agent-observability",
+        "type": "esql-investigation-pack",
+        "data_stream": ds_name,
+        "queries": [
+            {
+                "id": "slow-answers",
+                "title": "Slow Answers",
+                "when": "P95 latency or single sessions are slow.",
+                "language": "esql",
+                "query": f"FROM {ds_name}* | WHERE @timestamp >= NOW() - 24 hours AND gen_ai.agent_ext.latency_ms IS NOT NULL | STATS avg_latency=AVG(gen_ai.agent_ext.latency_ms), p95_latency=PERCENTILE(gen_ai.agent_ext.latency_ms, 95), events=COUNT(*) BY gen_ai.conversation.id | SORT p95_latency DESC | LIMIT 20",
+            },
+            {
+                "id": "failed-sessions",
+                "title": "Failed Sessions",
+                "when": "A user reports a broken or incomplete agent run.",
+                "language": "esql",
+                "query": f"FROM {ds_name}* | WHERE @timestamp >= NOW() - 24 hours AND event.outcome == \"failure\" | STATS failures=COUNT(*), errors=VALUES(error.type), tools=VALUES(gen_ai.tool.name) BY gen_ai.conversation.id | SORT failures DESC | LIMIT 20",
+            },
+            {
+                "id": "tool-error-hotspots",
+                "title": "Tool Error Hotspots",
+                "when": "Tool calls fail or retry too often.",
+                "language": "esql",
+                "query": f"FROM {ds_name}* | WHERE @timestamp >= NOW() - 24 hours AND gen_ai.tool.name IS NOT NULL | EVAL failed = CASE(event.outcome == \"failure\", 1, 0) | STATS calls=COUNT(*), failures=SUM(failed) BY gen_ai.tool.name, error.type | EVAL failure_rate = failures / calls | SORT failures DESC | LIMIT 20",
+            },
+            {
+                "id": "token-spikes",
+                "title": "Token Spikes",
+                "when": "Token usage jumps after a prompt, model, or routing change.",
+                "language": "esql",
+                "query": f"FROM {ds_name}* | WHERE @timestamp >= NOW() - 24 hours | STATS input_tokens=SUM(gen_ai.usage.input_tokens), output_tokens=SUM(gen_ai.usage.output_tokens), events=COUNT(*) BY gen_ai.request.model, gen_ai.conversation.id | EVAL total_tokens = input_tokens + output_tokens | SORT total_tokens DESC | LIMIT 20",
+            },
+            {
+                "id": "mcp-tool-calls",
+                "title": "MCP Tool Calls",
+                "when": "MCP server/tool latency or errors need drilldown.",
+                "language": "esql",
+                "query": f"FROM {ds_name}* | WHERE @timestamp >= NOW() - 24 hours AND (mcp.method.name IS NOT NULL OR gen_ai.agent_ext.component_type == \"mcp\") | EVAL failed = CASE(event.outcome == \"failure\", 1, 0) | STATS events=COUNT(*), failures=SUM(failed), avg_latency=AVG(gen_ai.agent_ext.latency_ms) BY mcp.method.name, gen_ai.tool.name, mcp.session.id | SORT failures DESC, avg_latency DESC | LIMIT 20",
+            },
+            {
+                "id": "low-feedback",
+                "title": "Low Feedback",
+                "when": "Users give negative feedback and you need the linked traces.",
+                "language": "esql",
+                "query": f"FROM {ds_name}* | WHERE @timestamp >= NOW() - 7 days AND gen_ai.feedback.score IS NOT NULL | WHERE gen_ai.feedback.score < 0 OR gen_ai.feedback.sentiment == \"negative\" | KEEP @timestamp, trace.id, gen_ai.conversation.id, gen_ai.feedback.score, gen_ai.feedback.sentiment, gen_ai.feedback.comment | SORT @timestamp DESC | LIMIT 50",
+            },
+        ],
+    }
+
+
+def build_alert_rule_specs(index_prefix: str) -> dict[str, Any]:
+    ds_name = build_data_stream_name(index_prefix)
+    return {
+        "product": "elasticsearch-agent-observability",
+        "type": "kibana-query-rule-specs",
+        "note": "Reference payloads for Kibana Elasticsearch query rules. Apply via Kibana Alerting UI/API; no ES/Kibana source changes required.",
+        "rules": [
+            {
+                "id": "agent-error-spike",
+                "title": "Agent error spike",
+                "query_language": "kuery",
+                "index": f"{ds_name}*",
+                "time_field": "@timestamp",
+                "query": "event.outcome:failure and not event.dataset:internal.*",
+                "window": "5m",
+                "threshold": {"metric": "count", "operator": "above", "value": 10, "group_by": ["service.name", "gen_ai.agent_ext.component_type"]},
+            },
+            {
+                "id": "slow-agent-turns",
+                "title": "Slow agent turns",
+                "query_language": "kuery",
+                "index": f"{ds_name}*",
+                "time_field": "@timestamp",
+                "query": "gen_ai.agent_ext.latency_ms > 30000 and gen_ai.conversation.id:*",
+                "window": "10m",
+                "threshold": {"metric": "count", "operator": "above", "value": 3, "group_by": ["gen_ai.conversation.id"]},
+            },
+            {
+                "id": "mcp-tool-failures",
+                "title": "MCP tool failures",
+                "query_language": "kuery",
+                "index": f"{ds_name}*",
+                "time_field": "@timestamp",
+                "query": "event.outcome:failure and (mcp.method.name:* or gen_ai.agent_ext.component_type:mcp)",
+                "window": "10m",
+                "threshold": {"metric": "count", "operator": "above", "value": 5, "group_by": ["mcp.method.name", "gen_ai.tool.name"]},
+            },
+            {
+                "id": "negative-feedback",
+                "title": "Negative user feedback",
+                "query_language": "kuery",
+                "index": f"{ds_name}*",
+                "time_field": "@timestamp",
+                "query": "gen_ai.feedback.sentiment:negative or gen_ai.feedback.score < 0",
+                "window": "15m",
+                "threshold": {"metric": "count", "operator": "above", "value": 0, "group_by": ["service.name"]},
+            },
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Report config
 # ---------------------------------------------------------------------------
 
@@ -1335,6 +1519,8 @@ def build_report_config(index_prefix: str, discovery: dict[str, Any], *, extensi
         "recommended_modules": modules,
         "human_surface": "kibana_dashboard",
         "kibana": kibana_bundle["summary"],
+        "investigations": [query["id"] for query in build_investigation_queries(index_prefix)["queries"]],
+        "alert_rule_specs": [rule["id"] for rule in build_alert_rule_specs(index_prefix)["rules"]],
         "metrics": [
             "success_rate",
             "p50_latency_ms",
@@ -1372,6 +1558,8 @@ def render_assets(discovery: dict[str, Any], output_dir: Path, *, index_prefix: 
     ingest_pipeline = build_ingest_pipeline(modules)
     ilm_policy = build_ilm_policy(validated_retention_days)
     kibana_saved_objects = build_kibana_saved_objects(validated_prefix, extensions=extensions)
+    investigation_queries = build_investigation_queries(validated_prefix)
+    alert_rule_specs = build_alert_rule_specs(validated_prefix)
     report_config = build_report_config(validated_prefix, discovery, extensions=extensions)
 
     paths: dict[str, Path] = {
@@ -1381,6 +1569,8 @@ def render_assets(discovery: dict[str, Any], output_dir: Path, *, index_prefix: 
         "ingest_pipeline": output_dir / "ingest-pipeline.json",
         "ilm_policy": output_dir / "ilm-policy.json",
         "report_config": output_dir / "report-config.json",
+        "investigation_queries": output_dir / "investigation-queries.json",
+        "alert_rule_specs": output_dir / "alert-rule-specs.json",
         "kibana_saved_objects_json": output_dir / "kibana-saved-objects.json",
         "kibana_saved_objects_ndjson": output_dir / "kibana-saved-objects.ndjson",
     }
@@ -1390,6 +1580,8 @@ def render_assets(discovery: dict[str, Any], output_dir: Path, *, index_prefix: 
     write_json(paths["ingest_pipeline"], ingest_pipeline)
     write_json(paths["ilm_policy"], ilm_policy)
     write_json(paths["report_config"], report_config)
+    write_json(paths["investigation_queries"], investigation_queries)
+    write_json(paths["alert_rule_specs"], alert_rule_specs)
     write_json(paths["kibana_saved_objects_json"], kibana_saved_objects)
     write_text(
         paths["kibana_saved_objects_ndjson"],

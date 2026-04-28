@@ -1,8 +1,10 @@
 # elasticsearch-agent-observability
 
-Elasticsearch backend for AI agent observability. One bootstrap → ES storage + Kibana dashboards + RCA alerting + regression evaluation.
+A small toolkit for sending AI agent telemetry to Elasticsearch and reviewing it in Kibana.
 
-Schema follows [OTel GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/). Plug in [OpenLLMetry](https://github.com/traceloop/openllmetry) or any OTel SDK — data lands in ES, dashboards light up.
+Bootstrap generates an ES data stream, ingest pipeline, Kibana saved objects, ES|QL investigation queries, Query Rule templates, and optional evaluation/diagnosis helpers. It does not change Elasticsearch or Kibana source code; it only uses public APIs.
+
+The schema follows [OTel GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where they fit. Project-only fields stay under `gen_ai.agent_ext.*`.
 
 **Python 3.10+, stdlib only, Basic (free) ES license.**
 
@@ -55,7 +57,7 @@ cd generated/llm-proxy && docker compose up -d
 export OPENAI_API_BASE=http://localhost:4000/v1
 ```
 
-Done. Data flows into ES, Kibana dashboards are live.
+If ES/Kibana are reachable and credentials are valid, telemetry should start landing in ES and Kibana assets should be available.
 
 Then check pipeline health:
 
@@ -69,29 +71,30 @@ python scripts/cli.py doctor --es-url http://localhost:9200
 bootstrap_observability.py
  → index template + component templates + ILM (hot/warm/cold/delete)
  → ingest pipeline (OTel→ECS normalization, sensitive field redaction)
- → 31 Kibana panels (latency, tokens, tools, sessions, guardrail, eval, feedback, reasoning)
+ → Kibana dashboard + Discover entries (event, failure, session, trace, MCP)
+ → ES|QL investigation pack + Query Rule specs
  → OTel Collector config + OTLP HTTP bridge fallback
 ```
 
 | Capability | What |
 |------------|------|
-| **Alerting** | 6 RCA analyzers (error spike, token anomaly, latency regression, session hotspot, retry storm, slow turn) with causal chain merging |
-| **Evaluation** | 7 regression evaluators + LLM-as-Judge, writes `gen_ai.evaluation.*` to ES |
-| **User feedback** | `POST /v1/feedback` on the bridge, sentiment + score trend panels |
-| **Reasoning trace** | Records why the agent chose each action (rationale, alternatives, confidence) |
-| **Session replay** | Nested span tree with decision trail + feedback at each step |
-| **Pipeline diagnostic** | 5 independent checks, refuses to let `/healthz` lie |
-| **Framework support** | Auto-detect + instrument AutoGen, CrewAI, LangGraph, OpenAI Agents, LlamaIndex, OpenClaw, Mastra |
-| **Instrumentation coverage** | Doctor tells you which fields are missing + exact fix snippets |
+| **Alerting** | 6 rule templates/checks for error spikes, token anomalies, latency regressions, session hotspots, retry storms, and slow turns |
+| **Evaluation** | Local evaluators plus optional LLM-as-Judge; writes `gen_ai.evaluation.*` to ES when enabled |
+| **User feedback** | `POST /v1/feedback` on the bridge, with score/sentiment fields for Kibana panels |
+| **Reasoning trace** | Optional fields for decision rationale, alternatives, and confidence; no raw prompt capture by default |
+| **Session view** | Renders a nested span tree from indexed traces when session/trace ids are present |
+| **Pipeline diagnostic** | Checks ingest, mappings, Kibana assets, and field coverage; `/healthz` alone is not enough |
+| **Framework support** | Detects common frameworks and generates wrappers/config where supported; coverage depends on runtime and instrumentation path |
+| **Instrumentation coverage** | `doctor` reports missing fields and suggested fixes |
 
 ## Data flow
 
 数据采集三层，**注入优先**：
 
 ```
-Layer 1 — 自动注入（zero-code）
+Layer 1 — 旁路/预加载采集
 ┌─────────────────────────────────────────────────────┐
-│  LLM Proxy (LiteLLM)                               │  ← 最干净，agent 零改动
+│  LLM Proxy (LiteLLM)                               │  ← agent 可不改代码
 │  Python OTel Bootstrap (monkey-patch OpenAI/Anthropic)
 │  Node.js OTel Bootstrap (--import preload)          │
 │  覆盖：model, tokens, latency, error                │
@@ -114,7 +117,7 @@ Layer 3 — 主动上报（agent-specific，仅用于不可注入的数据）
 OTel Collector / OTLP HTTP Bridge → ES ingest pipeline → Kibana
 ```
 
-**原则**：如果 agent 在手动 emit latency 或 token，说明应该走 Layer 1。手动上报只用于 reasoning/eval/feedback。
+**原则**：latency、token、error 优先走 Layer 1。手动上报主要用于 reasoning/eval/feedback 等语义字段。
 
 ## CLI
 
@@ -124,12 +127,12 @@ python scripts/cli.py <command> [options]
 
 | Command | What |
 |---------|------|
-| `init` | Bootstrap the full stack |
-| `quickstart` | Guided setup (auto-detects framework) |
+| `init` | Generate assets and optionally apply them |
+| `quickstart` | Guided setup (tries to detect framework) |
 | `doctor` | Pipeline diagnostic + instrumentation coverage |
-| `alert` | Alert + RCA (`--webhook-template slack\|dingtalk\|feishu\|wecom`) |
+| `alert` | Alert checks + diagnosis (`--webhook-template slack\|dingtalk\|feishu\|wecom`) |
 | `eval` | Run evaluators (`--evaluators llm_judge --llm-judge-endpoint <url>`) |
-| `replay` | Session replay (`--session-id <id>` or `--trace-id <id>`) |
+| `replay` | Session trace view (`--session-id <id>` or `--trace-id <id>`) |
 | `session-tail` | Generate a session JSONL tail bundle |
 | `status` | What's deployed on the cluster |
 | `validate` | Config drift detection |
@@ -157,11 +160,12 @@ All fields except `score` are optional. If `sentiment` is omitted, it's auto-der
 
 ## Schema
 
-80+ fields across OTel GenAI standard, ECS, and project extensions. Key namespaces:
+The field dictionary covers OTel GenAI fields, ECS fields, and a small project extension namespace. Key namespaces:
 
 | Namespace | Examples |
 |-----------|----------|
-| OTel standard | `gen_ai.request.model`, `gen_ai.tool.name`, `gen_ai.usage.*`, `gen_ai.conversation.id` |
+| OTel GenAI | `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.*`, `gen_ai.usage.*`, `gen_ai.conversation.id`, `gen_ai.tool.name` |
+| OTel MCP | `mcp.method.name`, `mcp.session.id`, `mcp.resource.uri`, `gen_ai.prompt.name` |
 | ECS standard | `@timestamp`, `event.*`, `service.*`, `trace.id`, `span.id` |
 | Agent extensions | `gen_ai.agent_ext.reasoning.*`, `gen_ai.agent_ext.turn_id`, `gen_ai.agent_ext.component_type` |
 | Evaluation | `gen_ai.evaluation.score`, `gen_ai.evaluation.outcome`, `gen_ai.evaluation.dimension` |
@@ -169,6 +173,8 @@ All fields except `score` are optional. If `sentiment` is omitted, it's auto-der
 | Guardrail | `gen_ai.guardrail.action`, `gen_ai.guardrail.category` |
 
 Full dictionary: [`references/telemetry_schema.md`](references/telemetry_schema.md). Field tiers: [`references/instrumentation_contract.md`](references/instrumentation_contract.md).
+
+Sensitive GenAI content is off by default. The ingest pipeline and bridge remove `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, `gen_ai.tool.definitions`, `gen_ai.tool.call.arguments`, and `gen_ai.tool.call.result`. If you need payload capture, add an explicit opt-in path and redaction policy first.
 
 ## Requirements
 

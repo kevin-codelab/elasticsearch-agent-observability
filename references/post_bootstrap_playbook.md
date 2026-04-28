@@ -1,10 +1,10 @@
 # Post-Bootstrap Playbook
 
-Bootstrap is over; something (you, an AI agent, or CI) just ran `bootstrap_observability.py` and got a `generated/` directory plus working ES/Kibana assets.
+Bootstrap is over; something (you, an AI agent, or CI) just ran `bootstrap_observability.py` and got a `generated/` directory plus ES/Kibana assets.
 
-**Tier 1** is live. The dashboard shows latency, error rate, token totals. Half the panels are empty because Tier 2 fields haven't been emitted yet. That's correct — each empty panel is a TODO.
+If ingestion is healthy, Tier 1 should show latency, error rate, and token totals. Panels that depend on Tier 2 fields may stay empty until the agent emits those fields. Treat that as setup work, not missing data to fake.
 
-This playbook tells an agent (human or AI) which TODO to do next, in what order.
+This playbook lists the next setup steps in order.
 
 ## Level 0 — Confirm the pipeline actually ingests (do this first)
 
@@ -25,7 +25,7 @@ Exit code contract:
 - `2` sent but lost, or indexed with the wrong shape — read the `next_step` field in the JSON output and apply it. Most common resolution: switch `--otlp-http-endpoint` from the Collector to the bridge (`:14319`) to unblock ingestion, then fix the Collector ES exporter separately.
 - `1` could not send or could not reach ES at all — nothing downstream will work until the transport or credentials are fixed; do not continue.
 
-Recommended first-install posture: **point the agent at the OTLP HTTP bridge first** (`http://127.0.0.1:14319`). It's a narrower, more reliable path and gets real traffic flowing through the same data stream / dashboards. Graduate to the native Collector ES exporter once the bridge path is stable.
+Recommended first-install posture: **point the agent at the OTLP HTTP bridge first** (`http://127.0.0.1:14319`). It is a narrower path and uses the same data stream / dashboards. Move to the native Collector ES exporter once the bridge path is stable.
 
 ## Level 1 — Tier 2 business fields (biggest ROI)
 
@@ -47,7 +47,7 @@ Goal: stop getting generic "HTTP 500" alerts; start seeing "timeout concentrated
 - [ ] At the retry point, set `gen_ai.agent_ext.retry_count` to the running count (not a boolean).
 - [ ] If the agent has a native latency measurement already, also set `gen_ai.agent_ext.latency_ms` (the alert uses it for long-turn detection independent of span duration).
 
-Verify: `alert_and_diagnose.py --time-range now-15m` starts citing specific `error_type` / tool / retry counts in the RCA section.
+Verify: `alert_and_diagnose.py --time-range now-15m` can cite specific `error_type` / tool / retry counts when those fields exist in recent data.
 
 ## Level 3 — Reasoning, evaluation, feedback, and guardrails
 
@@ -76,7 +76,7 @@ These fields **cannot be auto-injected** — they require active reporting from 
 - [ ] `gen_ai.evaluation.score` — numeric score from the evaluator
 - [ ] `gen_ai.evaluation.evaluator` — which evaluator produced this (e.g. `llm_judge`, `latency_check`)
 
-**How**: run `evaluate.py run --es-url <url>`. The evaluators automatically write results to ES. For custom evaluators, POST evaluation events to the bridge with these fields.
+**How**: run `evaluate.py run --es-url <url> --write-to-es`. The evaluators write project fields plus `gen_ai.evaluation.name`. They do not emit `gen_ai.evaluation.score.value` because it conflicts with the existing `gen_ai.evaluation.score` mapping in Elasticsearch.
 
 ### User feedback (`gen_ai.feedback.*`)
 
@@ -101,6 +101,8 @@ These fields **cannot be auto-injected** — they require active reporting from 
 
 **How**: include these fields as span attributes if the agent has safety filters, or POST to the bridge.
 
+- [ ] Production alerts — start from `generated/alert-rule-specs.json` and create Kibana Query Rules through the UI/API.
+- [ ] Investigations — start from `generated/investigation-queries.json`; keep complex questions in ES|QL/Discover instead of adding more dashboard panels.
 - [ ] Custom Kibana panels — add them via `--dashboard-extensions` on a follow-up bootstrap; don't hand-edit the generated saved objects.
 
 ## What to do with the `generated/` directory
@@ -116,9 +118,9 @@ These fields **cannot be auto-injected** — they require active reporting from 
 
 Stop when:
 
-- The dashboard tells you something new each week.
-- Alerts fire less often _and_ more accurately.
-- You can answer "why was last Tuesday slow?" in under a minute.
+- The dashboard answers the operational questions your team actually asks.
+- Alerts are actionable often enough to keep them enabled.
+- Slow or failed sessions can be traced to a service, tool, model, or error type.
 
 More fields do not automatically mean more value. The dashboard is a fixed surface; fields that no panel consumes are just bytes in ES.
 

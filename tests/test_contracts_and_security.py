@@ -201,6 +201,21 @@ class ContractsAndSecurityTests(unittest.TestCase):
         set_processors = [item["set"] for item in pipeline["processors"] if "set" in item]
         self.assertTrue(any(proc.get("field") == "@timestamp" for proc in set_processors))
 
+    def test_ingest_pipeline_redacts_otel_genai_opt_in_content(self) -> None:
+        pipeline = render_es_assets.build_ingest_pipeline(["model_adapter"])
+        removed_fields = {proc["remove"]["field"] for proc in pipeline["processors"] if "remove" in proc}
+        for field in {
+            "gen_ai.input.messages",
+            "gen_ai.output.messages",
+            "gen_ai.system_instructions",
+            "gen_ai.tool.definitions",
+            "gen_ai.tool.call.arguments",
+            "gen_ai.tool.call.result",
+            "prompt",
+            "completion",
+        }:
+            self.assertIn(field, removed_fields)
+
     def test_kibana_objects_include_lens_no_paid_features(self) -> None:
         bundle = render_es_assets.build_kibana_saved_objects("agent-obsv")
         types = {obj["type"] for obj in bundle["objects"]}
@@ -245,6 +260,9 @@ class ContractsAndSecurityTests(unittest.TestCase):
         self.assertIn("data_stream", report_config)
         self.assertEqual(report_config["data_stream"], "agent-obsv-events")
         self.assertIn("dashboard_id", report_config["kibana"])
+        self.assertIn("mcp_search_id", report_config["kibana"])
+        self.assertIn("mcp-tool-calls", report_config["investigations"])
+        self.assertIn("mcp-tool-failures", report_config["alert_rule_specs"])
         self.assertIn("p50_latency_ms", report_config["metrics"])
         self.assertIn("p95_latency_ms", report_config["metrics"])
         self.assertNotIn("p50_latency_ns", report_config["metrics"])

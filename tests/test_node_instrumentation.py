@@ -25,6 +25,10 @@ class NodeInstrumentationTests(unittest.TestCase):
         self.assertIn("openclaw-agent", snippet)
         self.assertIn("tracedToolCall", snippet)
         self.assertIn("tracedModelCall", snippet)
+        self.assertIn("tracedMcpToolCall", snippet)
+        self.assertIn("execute_tool", snippet)
+        self.assertIn("mcp.method.name", snippet)
+        self.assertIn("gen_ai.response.id", snippet)
         self.assertIn("gen_ai.usage.input_tokens", snippet)
 
     def test_render_snippet_to_file_node_mode_writes_bundle(self) -> None:

@@ -258,7 +258,7 @@ This repo does not guarantee:
 
 - auto-instrumentation of arbitrary agent code
 - perfect schema extraction from every telemetry source
-- a full dashboard pack in Kibana
+- a complete dashboard product in Kibana
 - end-to-end runtime → Collector → ES → Kibana validation for every target app
 
-Treat it as a strong Elastic-side starter, not as the whole runtime plane.
+Treat it as a practical Elastic-side starter, not as the whole runtime plane.

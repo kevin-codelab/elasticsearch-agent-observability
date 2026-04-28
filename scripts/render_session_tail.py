@@ -11,9 +11,9 @@ This renderer generates a standalone Python script that:
 2. Parses each JSON line and maps fields to the observability schema
 3. POSTs each event as an OTLP log to the OTLP HTTP bridge
 
-This is **Layer 1 — zero-code injection**: the agent writes its native JSONL
-as usual; the tail script runs alongside and ships data to ES. No code change
-in the agent.
+This is **Layer 1 — sidecar-style ingestion**: the agent writes its native JSONL
+as usual; the tail script runs alongside and ships data to ES. It does not
+require agent code changes when the JSONL shape is compatible.
 
 Bundle layout::
 
@@ -71,39 +71,58 @@ SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", "{service_name}")
 # Default field mapping: source JSONL key → target schema key.
 # Override by editing field_map.json or setting FIELD_MAP_FILE env var.
 DEFAULT_FIELD_MAP = {{
-    # model / tokens
+    "provider": "gen_ai.provider.name",
+    "provider_name": "gen_ai.provider.name",
+    "system": "gen_ai.provider.name",
     "model": "gen_ai.request.model",
     "model_name": "gen_ai.request.model",
     "response_model": "gen_ai.response.model",
+    "actual_model": "gen_ai.response.model",
+    "response_id": "gen_ai.response.id",
+    "completion_id": "gen_ai.response.id",
+    "finish_reason": "gen_ai.response.finish_reasons",
+    "finish_reasons": "gen_ai.response.finish_reasons",
+    "output_type": "gen_ai.output.type",
     "input_tokens": "gen_ai.usage.input_tokens",
     "output_tokens": "gen_ai.usage.output_tokens",
     "prompt_tokens": "gen_ai.usage.input_tokens",
     "completion_tokens": "gen_ai.usage.output_tokens",
     "total_tokens": "gen_ai.usage.total_tokens",
-    # latency
+    "cache_read_input_tokens": "gen_ai.usage.cache_read.input_tokens",
+    "cached_input_tokens": "gen_ai.usage.cache_read.input_tokens",
+    "cache_creation_input_tokens": "gen_ai.usage.cache_creation.input_tokens",
     "latency_ms": "gen_ai.agent_ext.latency_ms",
     "duration_ms": "gen_ai.agent_ext.latency_ms",
     "duration": "gen_ai.agent_ext.latency_ms",
-    # session / agent
     "session_id": "gen_ai.conversation.id",
     "conversation_id": "gen_ai.conversation.id",
     "thread_id": "gen_ai.conversation.id",
     "agent_id": "gen_ai.agent.id",
     "agent_name": "gen_ai.agent.name",
+    "agent_version": "gen_ai.agent.version",
+    "agent_description": "gen_ai.agent.description",
     "run_id": "gen_ai.agent.id",
-    # tool
+    "turn_id": "gen_ai.agent_ext.turn_id",
+    "component_type": "gen_ai.agent_ext.component_type",
     "tool_name": "gen_ai.tool.name",
     "tool": "gen_ai.tool.name",
     "function_name": "gen_ai.tool.name",
     "tool_call_id": "gen_ai.tool.call.id",
-    # role / action
+    "mcp_method": "mcp.method.name",
+    "mcp_method_name": "mcp.method.name",
+    "mcp_session_id": "mcp.session.id",
+    "mcp_resource_uri": "mcp.resource.uri",
+    "resource_uri": "mcp.resource.uri",
+    "prompt_name": "gen_ai.prompt.name",
     "role": "event.action",
     "type": "event.action",
     "action": "event.action",
-    # error
+    "operation": "gen_ai.operation.name",
+    "operation_name": "gen_ai.operation.name",
+    "data_source_id": "gen_ai.data_source.id",
+    "knowledge_source": "gen_ai.data_source.id",
     "error": "error.type",
     "error_type": "error.type",
-    # status
     "status": "event.outcome",
     "success": "event.outcome",
 }}
@@ -219,7 +238,10 @@ def _map_record(record: dict[str, Any], field_map: dict[str, str]) -> dict[str, 
             doc.setdefault("gen_ai.operation.name", "chat")
         elif role_lower in ("tool", "function", "tool_result"):
             doc.setdefault("gen_ai.agent_ext.component_type", "tool")
-            doc.setdefault("gen_ai.operation.name", "tool_call")
+            doc.setdefault("gen_ai.operation.name", "execute_tool")
+        elif role_lower in ("mcp", "mcp_tool", "mcp_tool_result"):
+            doc.setdefault("gen_ai.agent_ext.component_type", "mcp")
+            doc.setdefault("gen_ai.operation.name", "execute_tool")
         elif role_lower in ("system", "user"):
             doc.setdefault("gen_ai.agent_ext.component_type", "runtime")
 
@@ -236,6 +258,12 @@ def _map_record(record: dict[str, Any], field_map: dict[str, str]) -> dict[str, 
             doc.setdefault("gen_ai.usage.output_tokens", usage["output_tokens"])
         if usage.get("total_tokens") is not None:
             doc.setdefault("gen_ai.usage.total_tokens", usage["total_tokens"])
+        if usage.get("cache_read_input_tokens") is not None:
+            doc.setdefault("gen_ai.usage.cache_read.input_tokens", usage["cache_read_input_tokens"])
+        if usage.get("cached_input_tokens") is not None:
+            doc.setdefault("gen_ai.usage.cache_read.input_tokens", usage["cached_input_tokens"])
+        if usage.get("cache_creation_input_tokens") is not None:
+            doc.setdefault("gen_ai.usage.cache_creation.input_tokens", usage["cache_creation_input_tokens"])
 
     # Fallback: set event.outcome if not yet determined
     if "event.outcome" not in doc:
@@ -467,14 +495,26 @@ if __name__ == "__main__":
 
 
 _DEFAULT_FIELD_MAP = {
+    "provider": "gen_ai.provider.name",
+    "provider_name": "gen_ai.provider.name",
+    "system": "gen_ai.provider.name",
     "model": "gen_ai.request.model",
     "model_name": "gen_ai.request.model",
     "response_model": "gen_ai.response.model",
+    "actual_model": "gen_ai.response.model",
+    "response_id": "gen_ai.response.id",
+    "completion_id": "gen_ai.response.id",
+    "finish_reason": "gen_ai.response.finish_reasons",
+    "finish_reasons": "gen_ai.response.finish_reasons",
+    "output_type": "gen_ai.output.type",
     "input_tokens": "gen_ai.usage.input_tokens",
     "output_tokens": "gen_ai.usage.output_tokens",
     "prompt_tokens": "gen_ai.usage.input_tokens",
     "completion_tokens": "gen_ai.usage.output_tokens",
     "total_tokens": "gen_ai.usage.total_tokens",
+    "cache_read_input_tokens": "gen_ai.usage.cache_read.input_tokens",
+    "cached_input_tokens": "gen_ai.usage.cache_read.input_tokens",
+    "cache_creation_input_tokens": "gen_ai.usage.cache_creation.input_tokens",
     "latency_ms": "gen_ai.agent_ext.latency_ms",
     "duration_ms": "gen_ai.agent_ext.latency_ms",
     "session_id": "gen_ai.conversation.id",
@@ -482,11 +522,28 @@ _DEFAULT_FIELD_MAP = {
     "thread_id": "gen_ai.conversation.id",
     "agent_id": "gen_ai.agent.id",
     "agent_name": "gen_ai.agent.name",
+    "agent_version": "gen_ai.agent.version",
+    "agent_description": "gen_ai.agent.description",
+    "run_id": "gen_ai.agent.id",
+    "turn_id": "gen_ai.agent_ext.turn_id",
+    "component_type": "gen_ai.agent_ext.component_type",
     "tool_name": "gen_ai.tool.name",
     "tool": "gen_ai.tool.name",
     "function_name": "gen_ai.tool.name",
+    "tool_call_id": "gen_ai.tool.call.id",
+    "mcp_method": "mcp.method.name",
+    "mcp_method_name": "mcp.method.name",
+    "mcp_session_id": "mcp.session.id",
+    "mcp_resource_uri": "mcp.resource.uri",
+    "resource_uri": "mcp.resource.uri",
+    "prompt_name": "gen_ai.prompt.name",
     "role": "event.action",
     "type": "event.action",
+    "action": "event.action",
+    "operation": "gen_ai.operation.name",
+    "operation_name": "gen_ai.operation.name",
+    "data_source_id": "gen_ai.data_source.id",
+    "knowledge_source": "gen_ai.data_source.id",
     "error": "error.type",
     "error_type": "error.type",
     "status": "event.outcome",
@@ -537,11 +594,16 @@ mapping is built in; customize by editing `field_map.json`:
 
 ```json
 {{
+  "provider": "gen_ai.provider.name",
   "model": "gen_ai.request.model",
+  "response_id": "gen_ai.response.id",
   "input_tokens": "gen_ai.usage.input_tokens",
   "output_tokens": "gen_ai.usage.output_tokens",
+  "cache_read_input_tokens": "gen_ai.usage.cache_read.input_tokens",
   "latency_ms": "gen_ai.agent_ext.latency_ms",
-  "session_id": "gen_ai.conversation.id"
+  "session_id": "gen_ai.conversation.id",
+  "turn_id": "gen_ai.agent_ext.turn_id",
+  "mcp_method": "mcp.method.name"
 }}
 ```
 

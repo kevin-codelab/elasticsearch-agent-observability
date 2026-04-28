@@ -2,15 +2,15 @@
 """Unified CLI for elasticsearch-agent-observability.
 
 Usage:
-    agent-obsv init       — bootstrap the full stack (index template + ILM + pipeline + dashboard + Collector + bridge)
+    agent-obsv init       — generate/apply ES, Kibana, Collector, and bridge assets
     agent-obsv status     — what's deployed on the cluster
-    agent-obsv doctor     — honest end-to-end pipeline diagnostic
-    agent-obsv alert      — alert check with root-cause analysis
+    agent-obsv doctor     — pipeline diagnostic and field coverage check
+    agent-obsv alert      — alert checks with field-based diagnosis
     agent-obsv query      — pre-built ES query templates
     agent-obsv report     — generate a smoke/metrics report
     agent-obsv validate   — configuration drift detection
     agent-obsv uninstall  — remove all managed assets
-    agent-obsv quickstart — guided one-command setup for common agent frameworks
+    agent-obsv quickstart — guided setup for common agent frameworks
     agent-obsv session-tail — generate a session JSONL tail bundle
     agent-obsv scenarios  — show "I want to do X → run Y" cheat sheet
 """
@@ -27,13 +27,13 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 
 COMMANDS: dict[str, tuple[str, str]] = {
-    "init":       ("bootstrap_observability", "Bootstrap the full observability stack"),
-    "quickstart": ("quickstart",              "Guided one-command setup for common agent frameworks"),
+    "init":       ("bootstrap_observability", "Generate and optionally apply observability assets"),
+    "quickstart": ("quickstart",              "Guided setup for common agent frameworks"),
     "status":     ("status",                  "Report what assets are deployed on the cluster"),
-    "doctor":     ("doctor",                  "Honest end-to-end pipeline diagnostic"),
-    "alert":      ("alert_and_diagnose",      "Alert check with intelligent root-cause analysis"),
+    "doctor":     ("doctor",                  "Pipeline diagnostic and field coverage check"),
+    "alert":      ("alert_and_diagnose",      "Alert checks with field-based diagnosis"),
     "eval":       ("evaluate",                "Run regression evaluators against recent traces"),
-    "replay":     ("replay",                  "Session replay — nested span tree from ES traces"),
+    "replay":     ("replay",                  "Session trace view from ES traces"),
     "query":      ("query",                   "Pre-built ES query templates"),
     "report":     ("generate_report",         "Generate a smoke/metrics report"),
     "session-tail": ("render_session_tail",   "Generate a session JSONL tail bundle"),

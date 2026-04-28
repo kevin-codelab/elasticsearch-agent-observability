@@ -104,8 +104,8 @@ _TOOL_WRAPPER = '''
 
 # --- Convenience wrappers for common agent operations ---
 
-def traced_tool_call(tool_name: str):
-    """Decorator that wraps a tool function with an OTel span."""
+def traced_tool_call(tool_name: str, *, mcp_method: str | None = None):
+    """Decorator that wraps a tool function with an OTel GenAI execute_tool span."""
     def decorator(func):
         def wrapper(*args, **kwargs):
             try:
@@ -113,13 +113,14 @@ def traced_tool_call(tool_name: str):
                 tracer = trace.get_tracer("agent-observability")
             except ImportError:
                 return func(*args, **kwargs)
-            with tracer.start_as_current_span(
-                f"tool.{tool_name}",
-                attributes={
-                    "gen_ai.tool.name": tool_name,
-                    "gen_ai.operation.name": "tool_call",
-                },
-            ) as span:
+            attrs = {
+                "gen_ai.tool.name": tool_name,
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.agent_ext.component_type": "mcp" if mcp_method else "tool",
+            }
+            if mcp_method:
+                attrs["mcp.method.name"] = mcp_method
+            with tracer.start_as_current_span(f"execute_tool {tool_name}", attributes=attrs) as span:
                 try:
                     result = func(*args, **kwargs)
                     span.set_attribute("event.outcome", "success")
@@ -135,8 +136,8 @@ def traced_tool_call(tool_name: str):
     return decorator
 
 
-def traced_model_call(model_name: str):
-    """Decorator that wraps an LLM call with an OTel span."""
+def traced_model_call(model_name: str, *, provider_name: str | None = None, operation_name: str = "chat"):
+    """Decorator that wraps an LLM call with an OTel GenAI model span."""
     def decorator(func):
         def wrapper(*args, **kwargs):
             try:
@@ -144,13 +145,14 @@ def traced_model_call(model_name: str):
                 tracer = trace.get_tracer("agent-observability")
             except ImportError:
                 return func(*args, **kwargs)
-            with tracer.start_as_current_span(
-                f"model.{model_name}",
-                attributes={
-                    "gen_ai.request.model": model_name,
-                    "gen_ai.operation.name": "model_call",
-                },
-            ) as span:
+            attrs = {
+                "gen_ai.request.model": model_name,
+                "gen_ai.operation.name": operation_name,
+                "gen_ai.agent_ext.component_type": "llm",
+            }
+            if provider_name:
+                attrs["gen_ai.provider.name"] = provider_name
+            with tracer.start_as_current_span(f"{operation_name} {model_name}", attributes=attrs) as span:
                 try:
                     result = func(*args, **kwargs)
                     span.set_attribute("event.outcome", "success")
@@ -159,10 +161,24 @@ def traced_model_call(model_name: str):
                         if isinstance(usage, dict):
                             span.set_attribute("gen_ai.usage.input_tokens", usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
                             span.set_attribute("gen_ai.usage.output_tokens", usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+                            if usage.get("total_tokens") is not None:
+                                span.set_attribute("gen_ai.usage.total_tokens", usage.get("total_tokens"))
+                            if usage.get("cache_read_input_tokens") is not None:
+                                span.set_attribute("gen_ai.usage.cache_read.input_tokens", usage.get("cache_read_input_tokens"))
+                            if usage.get("cache_creation_input_tokens") is not None:
+                                span.set_attribute("gen_ai.usage.cache_creation.input_tokens", usage.get("cache_creation_input_tokens"))
+                        if result.get("id"):
+                            span.set_attribute("gen_ai.response.id", str(result["id"]))
+                        if result.get("model"):
+                            span.set_attribute("gen_ai.response.model", str(result["model"]))
                     elif hasattr(result, "usage") and result.usage is not None:
                         usage = result.usage
                         span.set_attribute("gen_ai.usage.input_tokens", getattr(usage, "prompt_tokens", 0) or getattr(usage, "input_tokens", 0) or 0)
                         span.set_attribute("gen_ai.usage.output_tokens", getattr(usage, "completion_tokens", 0) or getattr(usage, "output_tokens", 0) or 0)
+                        if getattr(usage, "cache_read_input_tokens", None) is not None:
+                            span.set_attribute("gen_ai.usage.cache_read.input_tokens", getattr(usage, "cache_read_input_tokens"))
+                        if getattr(usage, "cache_creation_input_tokens", None) is not None:
+                            span.set_attribute("gen_ai.usage.cache_creation.input_tokens", getattr(usage, "cache_creation_input_tokens"))
                     return result
                 except Exception as exc:
                     span.set_attribute("event.outcome", "failure")
@@ -173,17 +189,52 @@ def traced_model_call(model_name: str):
         wrapper.__doc__ = func.__doc__
         return wrapper
     return decorator
+
+
+def traced_agent_invoke(agent_name: str, *, agent_id: str | None = None, version: str | None = None):
+    """Decorator for OTel GenAI invoke_agent spans."""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            try:
+                from opentelemetry import trace
+                tracer = trace.get_tracer("agent-observability")
+            except ImportError:
+                return func(*args, **kwargs)
+            attrs = {"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": agent_name, "gen_ai.agent_ext.component_type": "runtime"}
+            if agent_id:
+                attrs["gen_ai.agent.id"] = agent_id
+            if version:
+                attrs["gen_ai.agent.version"] = version
+            with tracer.start_as_current_span(f"invoke_agent {agent_name}", attributes=attrs) as span:
+                try:
+                    result = func(*args, **kwargs)
+                    span.set_attribute("event.outcome", "success")
+                    return result
+                except Exception as exc:
+                    span.set_attribute("event.outcome", "failure")
+                    span.set_attribute("error.type", type(exc).__name__)
+                    span.record_exception(exc)
+                    raise
+        wrapper.__name__ = func.__name__
+        wrapper.__doc__ = func.__doc__
+        return wrapper
+    return decorator
+
+
+def traced_mcp_tool_call(tool_name: str, method_name: str = "tools/call"):
+    """Decorator for MCP tool calls. Reuses the GenAI execute_tool span shape."""
+    return traced_tool_call(tool_name, mcp_method=method_name)
 '''
 
 _AUTO_PATCH = '''
 
-# --- Zero-code auto-patching for popular LLM SDKs ---
+# --- Optional monkey-patching for supported LLM SDKs ---
 
 def _auto_patch():
-    """Monkey-patch OpenAI and Anthropic SDK entry points to emit OTel spans automatically.
+    """Monkey-patch OpenAI and Anthropic SDK entry points to emit OTel spans.
 
-    Call this after setup() to get zero-code observability: just import this module and
-    every ChatCompletion / Messages call will be traced with token usage, latency, and errors.
+    Call this after setup() to patch supported SDK entry points. Compatible
+    ChatCompletion / Messages calls will be traced with token usage, latency, and errors.
     """
     try:
         from opentelemetry import trace
@@ -281,8 +332,16 @@ def _auto_patch():
                         if hasattr(result, "usage") and result.usage is not None:
                             span.set_attribute("gen_ai.usage.input_tokens", getattr(result.usage, "input_tokens", 0) or 0)
                             span.set_attribute("gen_ai.usage.output_tokens", getattr(result.usage, "output_tokens", 0) or 0)
+                            if getattr(result.usage, "cache_read_input_tokens", None) is not None:
+                                span.set_attribute("gen_ai.usage.cache_read.input_tokens", getattr(result.usage, "cache_read_input_tokens"))
+                            if getattr(result.usage, "cache_creation_input_tokens", None) is not None:
+                                span.set_attribute("gen_ai.usage.cache_creation.input_tokens", getattr(result.usage, "cache_creation_input_tokens"))
+                        if hasattr(result, "id"):
+                            span.set_attribute("gen_ai.response.id", str(result.id))
                         if hasattr(result, "model"):
                             span.set_attribute("gen_ai.response.model", result.model)
+                        if hasattr(result, "stop_reason") and result.stop_reason:
+                            span.set_attribute("gen_ai.response.finish_reasons", [str(result.stop_reason)])
                         return result
                     except Exception as exc:
                         span.set_attribute("event.outcome", "failure")
@@ -370,10 +429,11 @@ process.on('SIGTERM', () => {{
 const tracer = trace.getTracer('agent-observability');
 
 export async function tracedToolCall(toolName, fn, attrs = {{}}) {{
-  return tracer.startActiveSpan(`tool.${{toolName}}`, {{
+  return tracer.startActiveSpan(`execute_tool ${{toolName}}`, {{
     attributes: {{
       'gen_ai.tool.name': toolName,
-      'gen_ai.operation.name': 'tool_call',
+      'gen_ai.operation.name': 'execute_tool',
+      'gen_ai.agent_ext.component_type': attrs['mcp.method.name'] ? 'mcp' : 'tool',
       ...attrs,
     }},
   }}, async (span) => {{
@@ -394,10 +454,11 @@ export async function tracedToolCall(toolName, fn, attrs = {{}}) {{
 }}
 
 export async function tracedModelCall(modelName, fn, attrs = {{}}) {{
-  return tracer.startActiveSpan(`model.${{modelName}}`, {{
+  return tracer.startActiveSpan(`${{attrs['gen_ai.operation.name'] || 'chat'}} ${{modelName}}`, {{
     attributes: {{
       'gen_ai.request.model': modelName,
       'gen_ai.operation.name': 'chat',
+      'gen_ai.agent_ext.component_type': 'llm',
       ...attrs,
     }},
   }}, async (span) => {{
@@ -416,7 +477,13 @@ export async function tracedModelCall(modelName, fn, attrs = {{}}) {{
           Number(usage.output_tokens ?? usage.completion_tokens ?? 0),
         );
       }}
+      if (usage?.total_tokens != null) span.setAttribute('gen_ai.usage.total_tokens', Number(usage.total_tokens));
+      if (usage?.cache_read_input_tokens != null) span.setAttribute('gen_ai.usage.cache_read.input_tokens', Number(usage.cache_read_input_tokens));
+      if (usage?.cache_creation_input_tokens != null) span.setAttribute('gen_ai.usage.cache_creation.input_tokens', Number(usage.cache_creation_input_tokens));
+      if (result?.id) span.setAttribute('gen_ai.response.id', String(result.id));
       if (result?.model) span.setAttribute('gen_ai.response.model', result.model);
+      const finishReasons = result?.choices?.map((choice) => choice?.finish_reason).filter(Boolean);
+      if (finishReasons?.length) span.setAttribute('gen_ai.response.finish_reasons', finishReasons);
       return result;
     }} catch (err) {{
       span.setAttribute('event.outcome', 'failure');
@@ -433,6 +500,38 @@ export async function tracedModelCall(modelName, fn, attrs = {{}}) {{
     }}
   }});
 }}
+
+export async function tracedAgentInvoke(agentName, fn, attrs = {{}}) {{
+  return tracer.startActiveSpan(`invoke_agent ${{agentName}}`, {{
+    attributes: {{
+      'gen_ai.operation.name': 'invoke_agent',
+      'gen_ai.agent.name': agentName,
+      'gen_ai.agent_ext.component_type': 'runtime',
+      ...attrs,
+    }},
+  }}, async (span) => {{
+    try {{
+      const result = await fn();
+      span.setAttribute('event.outcome', 'success');
+      return result;
+    }} catch (err) {{
+      span.setAttribute('event.outcome', 'failure');
+      span.setAttribute('error.type', err?.name || 'Error');
+      span.recordException(err);
+      span.setStatus({{ code: SpanStatusCode.ERROR, message: String(err) }});
+      throw err;
+    }} finally {{
+      span.end();
+    }}
+  }});
+}}
+
+export async function tracedMcpToolCall(toolName, methodName, fn, attrs = {{}}) {{
+  return tracedToolCall(toolName, fn, {{
+    'mcp.method.name': methodName || 'tools/call',
+    ...attrs,
+  }});
+}}
 '''
 
 
@@ -443,10 +542,10 @@ This bundle does **not** auto-patch the OpenAI / Anthropic SDKs at import time
 (unlike the Python path) because the JavaScript ecosystem prefers preload-based
 instrumentation over monkey-patching.
 
-## What you get for free (zero code changes)
+## What preload can capture
 
 Once you preload `agent-otel-bootstrap.mjs` with `node --import ./agent-otel-bootstrap.mjs`,
-the generated Collector pipeline will already see:
+the generated Collector pipeline can see:
 
 - outbound HTTP latency and status per request (covers OpenAI / Anthropic REST calls)
 - inbound HTTP latency for your agent's own HTTP server (if any)
@@ -454,17 +553,18 @@ the generated Collector pipeline will already see:
 
 ## What requires one wrapper call
 
-To get **model name**, **token usage**, and **tool identity** (which power the
-generated Kibana dashboards and the RCA engine), wrap the call sites:
+To get **model name**, **token usage**, and **tool identity**, wrap the call sites:
 
 ```js
-import {{ tracedModelCall, tracedToolCall }} from './agent-otel-bootstrap.mjs';
+import {{ tracedModelCall, tracedToolCall, tracedMcpToolCall }} from './agent-otel-bootstrap.mjs';
 
 const resp = await tracedModelCall('gpt-4o-mini', () =>
   openai.chat.completions.create({{ model: 'gpt-4o-mini', messages }}),
+  {{ 'gen_ai.provider.name': 'openai' }},
 );
 
 const rows = await tracedToolCall('search_db', () => db.query(sql));
+const mcpRows = await tracedMcpToolCall('knowledge_search', 'tools/call', () => mcp.callTool(args));
 ```
 
 ## For external / third-party agents (e.g. OpenClaw)

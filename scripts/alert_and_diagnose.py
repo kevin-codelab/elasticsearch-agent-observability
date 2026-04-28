@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Alert check with intelligent root-cause analysis.
+"""Alert checks with field-based diagnosis.
 
 This script runs as a cron-style check (no Kibana Alerting license needed).
-When an anomaly is detected, it queries ES for context, builds a root-cause
-analysis, and outputs a structured report that can be piped to any notification
-channel (webhook, Slack, email, stdout).
+When an anomaly is detected, it queries ES for context, builds a diagnosis from
+available fields, and outputs a structured report that can be piped to any
+notification channel (webhook, Slack, email, stdout).
 
 Checks:
 1. Error rate spike — too many event.outcome:failure in the window
@@ -16,11 +16,11 @@ Checks:
 
 For each triggered alert, the script:
 - Queries the top contributing factors (which tool, model, session, component)
-- Builds a root-cause hypothesis
+- Builds an evidence-based hypothesis
 - Produces a structured JSON + human-readable summary with:
   - Phenomenon (what happened)
-  - Root cause (why it happened, based on evidence)
-  - Recommendation (what to do)
+  - Likely cause (based on available evidence)
+  - Recommendation (what to check next)
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ def _load_alert_rules(path_str: str) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Agent observability alert check with root-cause analysis")
+    parser = argparse.ArgumentParser(description="Agent observability alert checks with field-based diagnosis")
     parser.add_argument("--es-url", default="http://localhost:9200")
     parser.add_argument("--es-user", default="")
     parser.add_argument("--es-password", default="")

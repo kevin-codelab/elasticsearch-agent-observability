@@ -306,6 +306,11 @@ class SessionTailRendererTests(unittest.TestCase):
             self.assertIn("self._state[key] =", source)
             self.assertIn("--from-end", source)
             self.assertIn("--backfill", source)
+            field_map = json.loads(paths["field_map"].read_text(encoding="utf-8"))
+            self.assertEqual(field_map["provider"], "gen_ai.provider.name")
+            self.assertEqual(field_map["response_id"], "gen_ai.response.id")
+            self.assertEqual(field_map["mcp_method"], "mcp.method.name")
+            self.assertEqual(field_map["turn_id"], "gen_ai.agent_ext.turn_id")
 
 
 if __name__ == "__main__":

@@ -110,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--generate-llm-proxy",
         action="store_true",
-        help="Generate an llm-proxy/ docker-compose bundle (LiteLLM) for zero-code observability of upstream agents (e.g. OpenClaw).",
+        help="Generate an llm-proxy/ docker-compose bundle (LiteLLM) for proxy-based telemetry when the agent can use a compatible API base URL.",
     )
     parser.add_argument("--llm-proxy-port", type=int, default=4000, help="Host port the LLM proxy listens on")
     parser.add_argument(
@@ -892,7 +892,7 @@ def main() -> int:
             )
         if llm_proxy_paths:
             notes.append(
-                f"The `llm-proxy/` bundle provides a zero-code path for upstream OSS agents: run `docker compose up -d` in that directory and point the agent at `http://localhost:{args.llm_proxy_port}/v1`. See `llm-proxy/README.md`."
+                f"The `llm-proxy/` bundle provides a proxy-based path for compatible upstream agents: run `docker compose up -d` in that directory and point the agent at `http://localhost:{args.llm_proxy_port}/v1`. See `llm-proxy/README.md`."
             )
         if native_assets_paths:
             notes.append("Use the `elastic-native` bundle when the operator prefers Fleet enrollment or APM/OTLP hybrid wiring, and when Kibana APM / Traces / Service Map / User Experience / profiling surfaces should stay native instead of being reimplemented as custom dashboards.")
@@ -911,7 +911,7 @@ def main() -> int:
                 f"End-to-end verify crashed before producing a verdict: {verify_error}. Treat this bootstrap run as incomplete until verify succeeds."
             )
         notes.append(
-            f"Use `alert_and_diagnose.py --es-url {args.es_url} --index-prefix {index_prefix} --time-range now-15m` to run alert checks with root-cause analysis. "
+            f"Use `alert_and_diagnose.py --es-url {args.es_url} --index-prefix {index_prefix} --time-range now-15m` to run alert checks with field-based diagnosis. "
             "Add `--write-to-es` to persist alert history, `--generate-crontab` for scheduling, or `--webhook-url` for push notifications."
         )
 

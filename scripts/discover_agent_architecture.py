@@ -291,7 +291,7 @@ def compute_maturity_score(detected_modules: list[dict[str, Any]], command_handl
         telemetry += 10
     if "elastic_apm" in kinds:
         telemetry += 5
-    if any(s in signals for s in ("otlp_ingest", "otel_semantics", "trace_bridge")):
+    if any(s in signals for s in ("otlp_ingest", "otel_semantics", "trace_bridge", "genai_semconv", "collector_metrics")):
         telemetry += 5
     telemetry = min(telemetry, 25)
 
@@ -329,10 +329,10 @@ def compute_maturity_score(detected_modules: list[dict[str, Any]], command_handl
 
     if total >= 80:
         level = "advanced"
-        guidance = "Full trace/metric/log pipeline is ready. Focus on custom dashboards, alerting thresholds, and token efficiency."
+        guidance = "Full trace/log/metric path is ready. Focus on ES|QL investigation packs, query-rule thresholds, and token efficiency."
     elif total >= 50:
         level = "intermediate"
-        guidance = "Core signals exist. Recommend adding spanmetrics, token budget tracking, and structured error categorization."
+        guidance = "Core signals exist. Recommend adding OTel GenAI fields, MCP attributes, Collector/EDOT metrics, and structured error categorization."
     elif total >= 25:
         level = "basic"
         guidance = "Basic runtime detected. Recommend integrating OTel SDK, adding tool call tracing, and enabling model token tracking."

@@ -31,14 +31,24 @@ CONTRACT_EVENTS_PATH = REPO_ROOT / "references" / "contract_test_events.json"
 # The set of root-level keys the Painless script considers "known".
 KNOWN_ROOTS = frozenset([
     "@timestamp", "message", "event", "service", "agent", "trace", "span",
-    "parent", "transaction", "observer", "host", "labels", "gen_ai", "error", "log",
+    "parent", "transaction", "observer", "host", "labels", "gen_ai", "mcp", "alert", "otel", "error", "log",
 ])
 
 SENSITIVE_FIELDS = frozenset([
     "gen_ai.prompt",
     "gen_ai.completion",
+    "gen_ai.input.messages",
+    "gen_ai.output.messages",
+    "gen_ai.system_instructions",
+    "gen_ai.tool.definitions",
     "gen_ai.tool.call.arguments",
     "gen_ai.tool.call.result",
+    "prompt",
+    "completion",
+    "messages",
+    "system_prompt",
+    "tool_args",
+    "tool_result",
 ])
 
 

@@ -7,12 +7,14 @@ The primary human-facing surface is **Kibana**.
 In the current version, that specifically means:
 
 - a data view
-- saved searches for the event stream, failures, and session drilldown
+- saved searches for the event stream, failures, session drilldown, trace timeline, and MCP tool calls
 - a session-first dashboard bundle that can be applied through the API or imported via `kibana-saved-objects.ndjson`
 - Lens visualizations for event rate, latency, session hotspots, component hotspots, tool distribution, and token usage
+- `investigation-queries.json` with ES|QL queries for slow answers, failed sessions, tool errors, token spikes, MCP calls, and low feedback
+- `alert-rule-specs.json` with Kibana Query Rule reference payloads
 
-That is now a stronger Kibana starting point.
-It is still not a full platform-grade dashboard suite.
+That is a broader Kibana starting point than a raw data view.
+It is still not a platform-grade dashboard suite.
 
 ## Smoke And Machine Outputs
 
@@ -45,7 +47,7 @@ Keep the reporting language aligned with what the repo really emits today:
 - MCP methods
 - error types
 
-Do not claim model-fallback analysis, guardrail drilldown, or evaluation regression unless the implementation actually emits them.
+Do not claim model-fallback analysis, prompt management, annotation queues, or full experiment tracking. Those are platform features. This repo emits Elastic-native data and investigation assets.
 
 ## Time Field Contract
 

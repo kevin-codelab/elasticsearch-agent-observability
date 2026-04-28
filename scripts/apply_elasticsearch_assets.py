@@ -535,6 +535,10 @@ def apply_assets(
             objects = assets["kibana_saved_objects"].get("objects", [])
             for obj in objects:
                 plan.append({"action": "POST", "path": f"/api/saved_objects/{obj.get('type')}/{obj.get('id')}", "asset": f"kibana:{obj.get('type')}"})
+        if assets.get("investigation_queries"):
+            plan.append({"action": "REFERENCE", "path": "investigation-queries.json", "asset": "elastic:esql_investigation_pack"})
+        if assets.get("alert_rule_specs"):
+            plan.append({"action": "REFERENCE", "path": "alert-rule-specs.json", "asset": "kibana:query_rule_specs"})
         if native_summary and kibana_url:
             plan.append({"action": "CHECK", "path": "/api/status", "asset": "native:kibana_status_api"})
             if native_summary.get("ingest_mode") == "elastic-agent-fleet":

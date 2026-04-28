@@ -462,6 +462,9 @@ def _write_eval_results(config: ESConfig, index_prefix: str, report: dict[str, A
             "gen_ai.evaluation.score": r.get("score", 0),
             "gen_ai.evaluation.outcome": r["outcome"],
             "gen_ai.evaluation.dimension": r.get("dimension", "quality"),
+            # OTel GenAI event `gen_ai.evaluation.result` compatible field that
+            # does not conflict with the existing ES mapping for gen_ai.evaluation.score.
+            "gen_ai.evaluation.name": r["evaluator"],
             "message": f"[{r['outcome'].upper()}] {r['evaluator']}: {r.get('detail', '')}",
         }
         try:

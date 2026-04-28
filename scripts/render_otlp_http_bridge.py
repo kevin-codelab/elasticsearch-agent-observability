@@ -37,7 +37,17 @@ MAX_BODY_SIZE = 50 * 1024 * 1024  # 50 MB — reject oversized payloads to preve
 
 # Sensitive GenAI fields that should be stripped before writing to ES.
 # The ingest pipeline also removes these, but defence-in-depth is safer.
-_REDACT_KEYS = {{"gen_ai.prompt", "gen_ai.completion", "gen_ai.tool.call.arguments", "gen_ai.tool.call.result"}}
+_REDACT_KEYS = {{
+    "gen_ai.prompt",
+    "gen_ai.completion",
+    "gen_ai.input.messages",
+    "gen_ai.output.messages",
+    "gen_ai.system_instructions",
+    "gen_ai.tool.definitions",
+    "gen_ai.tool.call.arguments",
+    "gen_ai.tool.call.result",
+}}
+_REDACT_ALIASES = {{"prompt", "completion", "messages", "system_prompt", "tool_args", "tool_arguments", "tool_result"}}
 
 
 class BridgeServer(ThreadingHTTPServer):

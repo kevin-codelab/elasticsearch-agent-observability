@@ -200,6 +200,7 @@ class DashboardExtensionsTests(unittest.TestCase):
         self.assertEqual(bundle_default["summary"]["object_count"], bundle_none["summary"]["object_count"])
         self.assertEqual(len(bundle_default["summary"]["lens_ids"]), 27)
         self.assertIn("session_search_id", bundle_default["summary"])
+        self.assertIn("mcp_search_id", bundle_default["summary"])
 
     def test_lens_objects_omit_kibana_saved_object_meta(self) -> None:
         extensions = [
@@ -227,6 +228,15 @@ class DashboardExtensionsTests(unittest.TestCase):
         custom_lens = [obj for obj in bundle["objects"] if obj.get("id") == "agent-obsv-lens-p99-latency"]
         self.assertEqual(len(custom_lens), 1)
         self.assertEqual(custom_lens[0]["attributes"]["visualizationType"], "lnsMetric")
+
+    def test_investigation_pack_and_alert_specs_are_elastic_native(self) -> None:
+        investigations = render_es_assets.build_investigation_queries("agent-obsv")
+        alerts = render_es_assets.build_alert_rule_specs("agent-obsv")
+        self.assertEqual(investigations["type"], "esql-investigation-pack")
+        self.assertTrue(all(q["language"] == "esql" for q in investigations["queries"]))
+        self.assertTrue(any("mcp.method.name" in q["query"] for q in investigations["queries"]))
+        self.assertEqual(alerts["type"], "kibana-query-rule-specs")
+        self.assertTrue(all(rule["query_language"] == "kuery" for rule in alerts["rules"]))
 
 
 class ValidateStateTests(unittest.TestCase):
@@ -362,6 +372,8 @@ class InstrumentSnippetTests(unittest.TestCase):
         )
         self.assertIn("traced_tool_call", snippet)
         self.assertIn("traced_model_call", snippet)
+        self.assertIn("traced_mcp_tool_call", snippet)
+        self.assertIn("execute_tool", snippet)
 
     def test_render_snippet_minimal_without_modules(self) -> None:
         discovery = {"detected_modules": []}

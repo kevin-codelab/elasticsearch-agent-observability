@@ -17,12 +17,15 @@ Send canonical fields directly:
 - `service.*`
 - `agent.*`
 - `trace.id`, `span.id`, `parent.id`, `transaction.id`
-- `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.system`
+- `gen_ai.provider.name`, `gen_ai.system`
+- `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.response.id`, `gen_ai.response.finish_reasons`, `gen_ai.output.type`
 - `gen_ai.operation.name`
-- `gen_ai.usage.*`
-- `gen_ai.agent.id`, `gen_ai.agent.name`, `gen_ai.agent.version`
+- `gen_ai.usage.*`, including `gen_ai.usage.cache_read.input_tokens` and `gen_ai.usage.cache_creation.input_tokens`
+- `gen_ai.agent.id`, `gen_ai.agent.name`, `gen_ai.agent.version`, `gen_ai.agent.description`
 - `gen_ai.conversation.id`
-- `gen_ai.tool.name`, `gen_ai.tool.call.id`
+- `gen_ai.prompt.name`, `gen_ai.tool.name`, `gen_ai.tool.call.id`
+- `gen_ai.data_source.id`
+- `mcp.method.name`, `mcp.session.id`, `mcp.resource.uri`
 - `error.type`
 - `gen_ai.agent_ext.*`
 - `gen_ai.guardrail.*`
@@ -74,6 +77,9 @@ These fields extend OTel GenAI Semantic Conventions for agent runtime observabil
 - `gen_ai.evaluation.score` — numeric score
 - `gen_ai.evaluation.outcome` — `pass` / `fail` / `degraded`
 - `gen_ai.evaluation.dimension` — `quality` / `safety` / `latency` / `efficiency`
+- `gen_ai.evaluation.name` — OTel-compatible evaluator / metric name
+
+This repo keeps `gen_ai.evaluation.score` as a numeric leaf for backward compatibility. Elasticsearch cannot map both `gen_ai.evaluation.score` and `gen_ai.evaluation.score.value` in the same index, so `score.value` / `score.label` are not emitted by default.
 
 ## Reasoning trace fields
 
@@ -97,6 +103,23 @@ Collect end-user feedback and link it to traces/sessions. The bridge exposes `PO
 - `gen_ai.feedback.trace_id` — links feedback to a specific `trace.id`
 - `gen_ai.feedback.session_id` — links feedback to a `gen_ai.conversation.id`
 - `gen_ai.feedback.user_id` — opaque end-user identifier
+
+## Sensitive content policy
+
+Default: do not store raw prompts, completions, chat messages, system instructions, tool definitions, tool arguments, or tool results.
+
+The bridge and ingest pipeline remove these fields by default:
+
+- `gen_ai.prompt`
+- `gen_ai.completion`
+- `gen_ai.input.messages`
+- `gen_ai.output.messages`
+- `gen_ai.system_instructions`
+- `gen_ai.tool.definitions`
+- `gen_ai.tool.call.arguments`
+- `gen_ai.tool.call.result`
+
+If a team needs payload capture, add a separate opt-in path with truncation, PII filtering, and retention rules. Do not enable it silently.
 
 ## Important rule
 

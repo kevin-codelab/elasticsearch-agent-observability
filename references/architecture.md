@@ -37,7 +37,7 @@ Before rendering config, it tries to infer what the agent actually contains:
 
 ## Additional components
 
-- **Alert & diagnosis**: standalone cron-style check (`alert_and_diagnose.py`) for error rate spikes, latency degradation, and token anomalies. Outputs structured RCA.
+- **Alert & diagnosis**: standalone cron-style check (`alert_and_diagnose.py`) for error rate spikes, latency degradation, and token anomalies. Outputs structured diagnosis from the fields available in ES.
 - **Knowledge archival**: diagnosis results can be piped into `elasticsearch-insight-store` for persistent RCA storage.
 - **Drift validation**: `validate_state.py` compares local generated assets against the live ES cluster and reports structural drift.
 - **Maturity scoring**: discovery computes a multi-dimensional maturity score (basic_logging, structured_telemetry, genai_instrumentation, operational_readiness) to guide upgrade paths.

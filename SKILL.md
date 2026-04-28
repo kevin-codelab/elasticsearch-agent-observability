@@ -1,13 +1,13 @@
 ---
 name: elasticsearch-agent-observability
-description: "Use this skill when a user wants to set up Elasticsearch as the backend for AI agent observability. One bootstrap gives ES storage, Kibana dashboards, RCA alerting, and evaluation — all aligned to OTel GenAI Semantic Conventions."
+description: "Use this skill when a user wants Elasticsearch as the storage and Kibana surface for AI agent telemetry. It generates ES assets, Kibana saved objects, investigation queries, rule templates, and optional evaluation helpers using OTel GenAI-aligned fields."
 ---
 
 # Elasticsearch Agent Observability
 
-给 AI agent 接 Elasticsearch 可观测。一条命令出全套：索引模板、ILM、ingest pipeline、Kibana 仪表板、告警 + 根因分析。
+给 AI agent 接 Elasticsearch 可观测。它生成索引模板、ILM、ingest pipeline、Kibana saved objects、ES|QL 调查查询、规则模板和评估辅助脚本。
 
-不是完整可观测平台。只管 ES 后端的 data layer。
+不是完整可观测平台。只管 ES 后端 data layer 和 Kibana 起步资产。
 
 ## Install as a Skill
 
@@ -41,11 +41,11 @@ After install, the skill is ready. The agent reads this `SKILL.md` and knows wha
 
 ## Data Collection Architecture
 
-数据采集分三层。原则：**能自动注入的绝不手动上报**。
+数据采集分三层。原则：**优先使用旁路或预加载采集，手动上报只补语义字段**。
 
-### Layer 1 — 自动注入（Zero-code）
+### Layer 1 — 旁路/预加载采集
 
-拦截 LLM 调用，自动提取 model / tokens / latency / error。Agent 代码零修改。
+通过 LLM proxy、session tail 或 OTel bootstrap 采集 model / tokens / latency / error。是否需要改 agent 代码取决于接入方式。
 
 | 接入方式 | 适用场景 | 覆盖字段 |
 |---------|---------|---------|
@@ -55,11 +55,11 @@ After install, the skill is ready. The agent reads this `SKILL.md` and knows wha
 | **Node.js OTel Bootstrap** | Node/TS agent，`--import` 预加载 | HTTP 出站拦截 + `tracedModelCall` wrapper |
 | **Framework Patch** | AutoGen/CrewAI/LangGraph/OpenAI Agents | `gen_ai.agent.name`, `gen_ai.conversation.id`, `gen_ai.tool.name` |
 
-**选择优先级**：Session Tail（框架已有 JSONL）> LLM Proxy（最通用）> OTel Bootstrap（需 SDK）> Framework Patch（需 OTel tracer）
+**选择优先级**：Session Tail（框架已有 JSONL）> LLM Proxy（通用旁路）> OTel Bootstrap（需 SDK）> Framework Patch（需 OTel tracer）
 
 ### Layer 2 — 增强注入（Low-code）
 
-Framework patch 自动关联 session/turn/tool 到 span。需要目标框架在 `instrument_frameworks.py` 支持列表内。
+Framework patch 补充 session/turn/tool 到 span 的关联。需要目标框架在 `instrument_frameworks.py` 支持列表内。
 
 已支持：AutoGen, CrewAI, LangGraph, OpenAI Agents SDK。
 
@@ -83,7 +83,7 @@ Framework patch 自动关联 session/turn/tool 到 span。需要目标框架在 
 
 ```
 1. quickstart.py --agent-dir <path> --apply
-   （自动检测框架、生成配置、apply 到 ES/Kibana）
+   （尝试检测框架、生成配置、apply 到 ES/Kibana）
 
 2. 或者分步走：
    bootstrap_observability.py --workspace <path> --output-dir <dir> \
@@ -96,7 +96,7 @@ Framework patch 自动关联 session/turn/tool 到 span。需要目标框架在 
 3. doctor.py --es-url <url>
    （确认管线健康，看 instrumentation coverage 缺什么字段）
 
-4. 按 doctor 输出的 fix 补埋点（或让 AI agent 自动补）
+4. 按 doctor 输出的建议补埋点
 
 5. alert_and_diagnose.py --es-url <url> --time-range now-15m
    （告警 + 根因分析）
@@ -108,6 +108,8 @@ Framework patch 自动关联 session/turn/tool 到 span。需要目标框架在 
 |-------|-----|
 | 检查管线健康 | `doctor.py` |
 | 看告警 + 根因 | `alert_and_diagnose.py` |
+| 查慢回答/失败 session/MCP | 打开 `generated/investigation-queries.json`，复制 ES|QL 到 Kibana |
+| 建 Kibana Query Rule | 用 `generated/alert-rule-specs.json` 作为规则模板 |
 | 跑回归评估 | `evaluate.py run` |
 | 回放一个 session | `replay.py --session-id <id>` |
 | 看部署了什么 | `status.py` |
@@ -135,9 +137,11 @@ Framework patch 自动关联 session/turn/tool 到 span。需要目标框架在 
 
 **Credential safety** — 默认 env placeholder，不落盘。只有用户明确要求才 inline。
 
+**Sensitive GenAI content is off** — 默认删除 `gen_ai.input.messages`、`gen_ai.output.messages`、`gen_ai.system_instructions`、`gen_ai.tool.definitions`、tool arguments/result。需要 payload capture 时，先让用户确认 opt-in 和脱敏策略。
+
 **Reasoning trace PII** — `rationale` 截断 500 字符、`input_summary` 截断 300 字符。ingest pipeline 强制执行，防止 PII 无限落库。
 
-**Instrumentation coverage** — doctor 会告诉你缺什么字段。缺 Tier 2 字段不代表管线坏了，代表面板是空的。按 fix 补。
+**Instrumentation coverage** — doctor 会告诉你缺哪些 OTel GenAI/MCP 字段。缺 Tier 2 字段不代表管线坏了，代表面板是空的。按 fix 补。
 
 ## Commands
 
@@ -145,7 +149,7 @@ Framework patch 自动关联 session/turn/tool 到 span。需要目标框架在 
 
 | 脚本 | 用途 |
 |------|------|
-| `bootstrap_observability.py` | 一键生成全套资产 + 可选 apply |
+| `bootstrap_observability.py` | 生成资产 + 可选 apply |
 | `doctor.py` | 5 项诊断 + 埋点覆盖度检查 |
 | `alert_and_diagnose.py` | 6 种告警 + 根因分析 + 因果链 |
 | `evaluate.py` | 7 个回归评估器（含 LLM-as-Judge） |
@@ -155,11 +159,11 @@ Framework patch 自动关联 session/turn/tool 到 span。需要目标框架在 
 
 | 脚本 | 用途 |
 |------|------|
-| `quickstart.py` | 引导式一键设置（自动检测框架） |
+| `quickstart.py` | 引导式设置（尝试检测框架） |
 | `status.py` | 集群资产状态 |
 | `validate_state.py` | 配置漂移检测 |
 | `uninstall.py` | 安全卸载（默认 dry-run） |
-| `instrument_frameworks.py` | 框架自动插桩（AutoGen/CrewAI/LangGraph/OpenAI Agents） |
+| `instrument_frameworks.py` | 支持框架的插桩辅助（AutoGen/CrewAI/LangGraph/OpenAI Agents） |
 
 渲染（通常由 bootstrap 内部调用）：
 
@@ -167,7 +171,7 @@ Framework patch 自动关联 session/turn/tool 到 span。需要目标框架在 
 
 ## Self-Extension
 
-1. `doctor.py` 是 source of truth。verdict 不是 `healthy` → 先修管线。
+1. 先看 `doctor.py`。verdict 不是 `healthy` → 先修管线。
 2. 首次装机走 bridge（`:14319`）。稳了再升级到 Collector。
 3. 按 `references/post_bootstrap_playbook.md` 的顺序补字段，不要跳。
 4. 只 emit `references/telemetry_schema.md` 里列的字段。

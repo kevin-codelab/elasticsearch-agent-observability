@@ -6,13 +6,13 @@ This file answers a different question: **which fields power which part of the g
 ## The three tiers
 
 ```
-┌─ Tier 1 (baseline) ────────── bootstrap gives you this for free
+┌─ Tier 1 (baseline) ────────── generated setup can provide these fields
 ├─ Tier 2 (semantic)  ────────── agent wires these when it touches tool/model code
-└─ Tier 3 (operational) ────────── nice-to-have, unblocks richer alerts
+└─ Tier 3 (operational) ────────── optional fields for sharper diagnostics
 ```
 
-The generated Kibana dashboard and the `alert_and_diagnose.py` rules are layered so each tier unlocks strictly more surface.
-**If Tier 2 is empty, half the dashboard stays empty.** That is the intended signal — don't paper over it with fake data.
+The generated Kibana dashboard and the `alert_and_diagnose.py` rules are layered so each tier adds more usable views.
+**If Tier 2 is empty, some dashboard panels stay empty.** That is the intended signal — don't paper over it with fake data.
 
 ## Tier 1 — baseline (free after bootstrap)
 
@@ -39,11 +39,11 @@ The agent has to wrap its own call sites. The Python or Node instrumentation bun
 | `gen_ai.conversation.id` | span context propagated through a user session | `session_failure_hotspot` alert, session drill-down |
 | `gen_ai.agent_ext.turn_id` | span context per conversation turn | `long_turn_hotspot` alert, turn-level diffing |
 | `gen_ai.agent_ext.component_type` | one of `tool` / `llm` / `mcp` / `memory` / `knowledge` / `guardrail` / `runtime` | per-component dashboards; filters in every alert |
-| `gen_ai.operation.name` | `tool_call` / `chat` / `retrieval` / `guardrail_check` | logical type faceting (separate from component tier) |
+| `gen_ai.operation.name` | OTel GenAI values: `chat` / `text_completion` / `embeddings` / `retrieval` / `invoke_agent` / `execute_tool` | logical type faceting (separate from component tier) |
 
 **Minimum signals on the dashboard after Tier 2**: everything above _plus_ tool mix, model mix, per-session view, per-turn view, retry-storm detection.
 
-## Tier 3 — operational (unlocks sharper alerts)
+## Tier 3 — operational (optional diagnostic fields)
 
 | Field | Powers |
 |---|---|

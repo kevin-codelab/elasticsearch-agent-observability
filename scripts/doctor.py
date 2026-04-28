@@ -424,6 +424,48 @@ _TIER2_FIELDS = {
 
 # Tier 3 fields — nice-to-have for sharper alerts and richer panels.
 _TIER3_FIELDS = {
+    "gen_ai.operation.name": {
+        "tier": 3,
+        "label": "OTel GenAI operation",
+        "powers": "operation mix panels, GenAI semconv compatibility",
+        "fix": 'span.set_attribute("gen_ai.operation.name", "chat")  # or embeddings/retrieval/invoke_agent/execute_tool',
+    },
+    "gen_ai.provider.name": {
+        "tier": 3,
+        "label": "GenAI provider",
+        "powers": "provider-level routing and model diagnostics",
+        "fix": 'span.set_attribute("gen_ai.provider.name", "openai")  # or anthropic/aws.bedrock/gcp.vertex_ai',
+    },
+    "gen_ai.request.model": {
+        "tier": 3,
+        "label": "request model",
+        "powers": "model distribution, model latency, token analysis",
+        "fix": 'span.set_attribute("gen_ai.request.model", model_name)',
+    },
+    "gen_ai.usage.input_tokens": {
+        "tier": 3,
+        "label": "input tokens",
+        "powers": "token usage trend and token spike investigations",
+        "fix": 'span.set_attribute("gen_ai.usage.input_tokens", input_tokens)',
+    },
+    "gen_ai.usage.output_tokens": {
+        "tier": 3,
+        "label": "output tokens",
+        "powers": "token usage trend and token spike investigations",
+        "fix": 'span.set_attribute("gen_ai.usage.output_tokens", output_tokens)',
+    },
+    "mcp.method.name": {
+        "tier": 3,
+        "label": "MCP method",
+        "powers": "MCP tool-call drilldown and alert grouping",
+        "fix": 'span.set_attribute("mcp.method.name", "tools/call")',
+    },
+    "gen_ai.evaluation.name": {
+        "tier": 3,
+        "label": "OTel evaluation name",
+        "powers": "standard GenAI evaluation event compatibility",
+        "fix": 'span.set_attribute("gen_ai.evaluation.name", "relevance")',
+    },
     "gen_ai.agent_ext.retry_count": {
         "tier": 3,
         "label": "retry count",
@@ -524,7 +566,7 @@ def _probe_instrumentation_coverage(
         detail = (
             f"Instrumentation coverage {score:.0%}. "
             f"Missing {len(tier2_missing)} Tier 2 field(s): {', '.join(m['field'] for m in tier2_missing)}. "
-            f"Half the dashboard panels will be empty until these are wired."
+            f"Panels that depend on those fields may stay empty until they are wired."
         )
     elif tier3_missing:
         status = "pass"

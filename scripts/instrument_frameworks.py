@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Framework-specific OTel instrumentation helpers.
 
-Provides auto-instrumentation patches for popular AI agent frameworks.
-Each framework module monkey-patches the framework's core call sites to
-emit OTel spans with the right GenAI semantic convention attributes, so
-the generated Kibana dashboard and RCA engine light up without manual
-span creation.
+Provides instrumentation patches for supported AI agent frameworks.
+Each framework module monkey-patches known call sites to emit OTel spans
+with GenAI semantic convention attributes. Coverage depends on framework
+version and runtime shape.
 
 Usage:
     # Auto-detect and patch at import time:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guided one-command setup for common agent frameworks.
+"""Guided setup for common agent frameworks.
 
 Detects the agent framework, generates the right instrumentation bundle,
 renders ES/Collector/Bridge assets, and optionally applies them.
@@ -404,8 +404,10 @@ The `agent_otel_bootstrap.py` (or `.mjs`) file handles TracerProvider,
 MeterProvider, and LogHandler setup. Import it at your entrypoint.
 
 ## Step 3: Add semantic annotations
-Wrap tool calls and model calls with the convenience wrappers to populate
-the Kibana dashboard panels.
+Wrap tool/model/agent/MCP calls with the convenience wrappers. They emit OTel GenAI fields such as `gen_ai.provider.name`, `gen_ai.response.id`, `gen_ai.operation.name`, and `mcp.method.name`.
+
+## Step 4: Investigate in Elastic
+Use `generated/investigation-queries.json` for ES|QL drilldowns and `generated/alert-rule-specs.json` as Kibana Query Rule templates.
 
 See `references/post_bootstrap_playbook.md` for the full self-extension checklist.
 """
@@ -413,7 +415,7 @@ See `references/post_bootstrap_playbook.md` for the full self-extension checklis
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Guided one-command setup for common agent frameworks",
+        description="Guided setup for common agent frameworks",
     )
     parser.add_argument("--agent-dir", required=True, help="Path to the agent project")
     parser.add_argument("--output-dir", default="", help="Output directory (defaults to <agent-dir>/generated/observability)")
@@ -431,7 +433,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true", help="Apply ES/Kibana assets to the cluster after rendering")
     parser.add_argument("--kibana-url", default="")
     parser.add_argument("--no-verify-tls", action="store_true")
-    parser.add_argument("--generate-llm-proxy", action="store_true", help="Also generate the LLM proxy bundle (zero-code path)")
+    parser.add_argument("--generate-llm-proxy", action="store_true", help="Also generate the LLM proxy bundle (no agent code changes when compatible)")
     return parser.parse_args()
 
 
