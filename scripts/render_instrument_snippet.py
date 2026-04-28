@@ -260,9 +260,16 @@ def _auto_patch():
                 }
                 metadata = kwargs.get("metadata") or {}
                 if isinstance(metadata, dict):
-                    user_id = metadata.get("user_id")
-                    if user_id:
-                        attrs["gen_ai.feedback.user_id"] = str(user_id)
+                    if metadata.get("conversation_id"):
+                        attrs["gen_ai.conversation.id"] = str(metadata["conversation_id"])
+                    if metadata.get("session_id"):
+                        attrs["gen_ai.conversation.id"] = str(metadata["session_id"])
+                    if metadata.get("agent_id"):
+                        attrs["gen_ai.agent.id"] = str(metadata["agent_id"])
+                    if metadata.get("turn_id"):
+                        attrs["gen_ai.agent_ext.turn_id"] = str(metadata["turn_id"])
+                    if metadata.get("user_id"):
+                        attrs["labels.user_id"] = str(metadata["user_id"])
                 with _tracer.start_as_current_span(
                     f"anthropic.messages.{model}",
                     attributes=attrs,
@@ -462,10 +469,14 @@ const rows = await tracedToolCall('search_db', () => db.query(sql));
 
 ## For external / third-party agents (e.g. OpenClaw)
 
-If the agent is an upstream OSS project you do not want to fork, prefer the
-**LLM proxy** path: put a proxy (LiteLLM / Helicone) in front of the OpenAI
-endpoint, point the agent at it via `OPENAI_API_BASE`, and have the proxy
-emit OTel spans directly. See `llm-proxy-starter/` in this bundle.
+Pick the least invasive path that matches the runtime:
+
+- **Session Tail**: prefer this when the framework writes session JSONL files
+  or uses a non-standard provider (for example OpenClaw + gongfeng).
+- **LLM Proxy**: use this only when the framework calls a standard
+  OpenAI-compatible endpoint and can point `OPENAI_API_BASE` at the proxy.
+- **Node bootstrap + wrappers**: use when you can touch the agent's entrypoint
+  and wrap model/tool call sites.
 '''
 
 

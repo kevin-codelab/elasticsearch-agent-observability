@@ -11,6 +11,7 @@ Usage:
     agent-obsv validate   — configuration drift detection
     agent-obsv uninstall  — remove all managed assets
     agent-obsv quickstart — guided one-command setup for common agent frameworks
+    agent-obsv session-tail — generate a session JSONL tail bundle
     agent-obsv scenarios  — show "I want to do X → run Y" cheat sheet
 """
 
@@ -35,6 +36,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "replay":     ("replay",                  "Session replay — nested span tree from ES traces"),
     "query":      ("query",                   "Pre-built ES query templates"),
     "report":     ("generate_report",         "Generate a smoke/metrics report"),
+    "session-tail": ("render_session_tail",   "Generate a session JSONL tail bundle"),
     "validate":   ("validate_state",          "Configuration drift detection"),
     "uninstall":  ("uninstall",               "Remove all managed assets from the cluster"),
 }
@@ -53,6 +55,7 @@ SCENARIOS = """\
 │ Query traces for a specific session  │ agent-obsv query      │
 │ Check for config drift               │ agent-obsv validate   │
 │ Generate a metrics report            │ agent-obsv report     │
+│ Tail session JSONL files             │ agent-obsv session-tail│
 │ Remove everything cleanly            │ agent-obsv uninstall  │
 └─────────────────────────────────────────────────────────────┘
 

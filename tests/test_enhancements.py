@@ -139,7 +139,7 @@ class MaturityScoreTests(unittest.TestCase):
             {"module_kind": "model_adapter"},
             {"module_kind": "otel_sdk_surface"},
         ]
-        signals = ["runs", "errors", "tool_calls", "tool_latency", "token_usage", "cost", "otlp_ingest"]
+        signals = ["runs", "errors", "tool_calls", "tool_latency", "token_usage", "otlp_ingest"]
         score = discover_agent_architecture.compute_maturity_score(modules, ["cmd_search"], signals)
         self.assertGreaterEqual(score["score"], 50)
         self.assertIn(score["level"], ("intermediate", "advanced"))
@@ -158,7 +158,7 @@ class MaturityScoreTests(unittest.TestCase):
             {"module_kind": "memory_store"},
         ]
         signals = ["runs", "errors", "tool_calls", "tool_latency", "tool_errors",
-                    "token_usage", "cost", "otlp_ingest", "otel_semantics",
+                    "token_usage", "otlp_ingest", "otel_semantics",
                     "mcp_calls", "command_calls", "evaluation_runs", "cache_hits"]
         handlers = ["cmd_search", "cmd_store", "cmd_get", "cmd_browse", "cmd_list"]
         score = discover_agent_architecture.compute_maturity_score(modules, handlers, signals)
@@ -212,10 +212,10 @@ class DashboardExtensionsTests(unittest.TestCase):
 
     def test_sum_extension_creates_xy_chart(self) -> None:
         extensions = [
-            {"id": "cost-trend", "field": "gen_ai.agent_ext.cost", "aggregation": "sum", "title": "Cost Over Time"},
+            {"id": "token-trend", "field": "gen_ai.usage.input_tokens", "aggregation": "sum", "title": "Input Tokens Over Time"},
         ]
         bundle = render_es_assets.build_kibana_saved_objects("agent-obsv", extensions=extensions)
-        custom_lens = [obj for obj in bundle["objects"] if obj.get("id") == "agent-obsv-lens-cost-trend"]
+        custom_lens = [obj for obj in bundle["objects"] if obj.get("id") == "agent-obsv-lens-token-trend"]
         self.assertEqual(len(custom_lens), 1)
         self.assertEqual(custom_lens[0]["attributes"]["visualizationType"], "lnsXY")
 

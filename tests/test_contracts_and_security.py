@@ -354,7 +354,6 @@ class ContractsAndSecurityTests(unittest.TestCase):
                 "retry_sum": {"value": 3},
                 "token_input_sum": {"value": 1000},
                 "token_output_sum": {"value": 500},
-                "cost_sum": {"value": 0.5},
                 "top_sessions": {"buckets": [{"key": "session-1", "doc_count": 12}]},
                 "failed_sessions": {"sessions": {"buckets": [{"key": "session-1", "doc_count": 4}]}},
                 "slow_turns": {

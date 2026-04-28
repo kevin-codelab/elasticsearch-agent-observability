@@ -334,13 +334,13 @@ these files and ship to ES — zero code changes, most reliable for non-standard
 LLM providers (e.g. gongfeng).
 ```bash
 # Generate the session tail bundle
-python scripts/render_session_tail.py \\
+agent-obsv session-tail \\
   --output-dir ./generated/session-tail \\
   --session-dir /path/to/openclaw/sessions \\
   --bridge-url http://localhost:14319
 
-# Start tailing (runs alongside OpenClaw)
-python generated/session-tail/session_tail.py
+# Start tailing (runs alongside OpenClaw, only new records by default)
+python generated/session-tail/session_tail.py --from-end
 ```
 Edit `field_map.json` to match your JSONL field names if they differ from defaults.
 

@@ -22,7 +22,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 class CLITests(unittest.TestCase):
     def test_commands_dict_has_required_entries(self) -> None:
         from cli import COMMANDS
-        required = {"init", "quickstart", "status", "doctor", "alert", "eval", "replay", "query", "report", "validate", "uninstall"}
+        required = {"init", "quickstart", "status", "doctor", "alert", "eval", "replay", "query", "report", "session-tail", "validate", "uninstall"}
         self.assertTrue(required.issubset(set(COMMANDS.keys())), f"Missing: {required - set(COMMANDS.keys())}")
 
     def test_commands_values_are_tuples(self) -> None:
@@ -283,6 +283,29 @@ class QuickstartTests(unittest.TestCase):
             (Path(tmpdir) / "package.json").write_text(json.dumps(pkg))
             result = _detect_framework(Path(tmpdir))
         self.assertEqual(result, "openclaw")
+
+
+# =========================================================================
+# Session tail renderer tests
+# =========================================================================
+
+class SessionTailRendererTests(unittest.TestCase):
+    def test_generated_session_tail_preserves_timestamps_and_persists_offsets(self) -> None:
+        import py_compile
+        import render_session_tail
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "bundle"
+            paths = render_session_tail.render_session_tail_bundle(out, session_dir=str(Path(tmpdir) / "sessions"))
+            script_path = paths["script"]
+            py_compile.compile(str(script_path), doraise=True)
+            source = script_path.read_text(encoding="utf-8")
+            self.assertIn("def _timestamp_to_unix_nano", source)
+            self.assertIn("event_ns = _timestamp_to_unix_nano", source)
+            self.assertIn(".session_tail_state.json", source)
+            self.assertIn("self._state[key] =", source)
+            self.assertIn("--from-end", source)
+            self.assertIn("--backfill", source)
 
 
 if __name__ == "__main__":

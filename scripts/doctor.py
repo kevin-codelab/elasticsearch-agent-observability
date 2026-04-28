@@ -436,12 +436,6 @@ _TIER3_FIELDS = {
         "powers": "RCA phrasing (timeout vs application-level)",
         "fix": 'span.set_attribute("error.type", "timeout")  # or rate_limit/api_error/auth_error/tool_error',
     },
-    "gen_ai.agent_ext.cost": {
-        "tier": 3,
-        "label": "per-call cost",
-        "powers": "cost panels, cost_regression evaluator",
-        "fix": "agent-obsv cost enrich --es-url <url>  # backfill from built-in price table",
-    },
     "gen_ai.agent_ext.reasoning.action": {
         "tier": 3,
         "label": "reasoning trace",

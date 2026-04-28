@@ -35,7 +35,6 @@ Keep the reporting language aligned with what the repo really emits today:
 - retry total
 - token input total
 - token output total
-- cost total
 - top sessions
 - failed sessions
 - slow turns

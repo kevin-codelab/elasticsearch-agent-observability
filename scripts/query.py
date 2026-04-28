@@ -120,7 +120,6 @@ def query_sessions(index: str, time_range: str, size: int = 10) -> tuple[str, di
                     "errors": {"filter": {"term": {"event.outcome": "failure"}}},
                     "tools_used": {"cardinality": {"field": "gen_ai.tool.name"}},
                     "total_tokens": {"sum": {"field": "gen_ai.usage.input_tokens"}},
-                    "total_cost": {"sum": {"field": "gen_ai.agent_ext.cost"}},
                     "time_range": {"stats": {"field": "@timestamp"}},
                 },
             }
@@ -147,7 +146,7 @@ def query_timeline(index: str, agent_run_id: str, size: int = 200) -> tuple[str,
             "gen_ai.agent_ext.latency_ms", "gen_ai.agent_ext.turn_id",
             "gen_ai.agent_ext.component_type", "gen_ai.agent_ext.semantic_kind",
             "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens",
-            "gen_ai.agent_ext.cost", "span.id", "error.type", "message",
+            "span.id", "error.type", "message",
         ],
     }
 
@@ -216,10 +215,7 @@ def _render_session_aggs(aggs: dict) -> str:
         errors = b.get("errors", {}).get("doc_count", 0)
         tools = b.get("tools_used", {}).get("value", 0)
         tokens = b.get("total_tokens", {}).get("value", 0)
-        cost = b.get("total_cost", {}).get("value", 0)
         parts = [f"{sid}: {total} events, {errors} errors, {tools} tools, {int(tokens)} tokens"]
-        if cost:
-            parts.append(f"${cost:.4f}")
         lines.append("  ".join(parts))
     return "\n".join(lines)
 

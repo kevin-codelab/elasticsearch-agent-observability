@@ -63,7 +63,7 @@ MODULE_RULES = {
         "priority": 90,
         "path_keywords": ["llm", "model", "openai", "anthropic", "prompt"],
         "content_keywords": ["openai", "anthropic", "model", "completion", "messages", "token", "go-openai", "sashabaranov", "langchain", "llamaindex"],
-        "signals": ["model_calls", "token_usage", "cost", "latency", "model_errors"],
+        "signals": ["model_calls", "token_usage", "latency", "model_errors"],
     },
     "memory_store": {
         "priority": 85,
@@ -267,7 +267,7 @@ def compute_maturity_score(detected_modules: list[dict[str, Any]], command_handl
     Scoring dimensions:
     - basic_logging (0-15): runtime entrypoint + basic log output
     - structured_telemetry (0-25): OTel SDK, trace, existing observability hooks
-    - genai_instrumentation (0-25): model adapter, tool registry, token/cost signals
+    - genai_instrumentation (0-25): model adapter, tool registry, token signals
     - operational_readiness (0-20): MCP surface, command handlers, evaluation harness
     - depth_bonus (0-15): breadth of signals, command handler diversity
     """
@@ -301,7 +301,7 @@ def compute_maturity_score(detected_modules: list[dict[str, Any]], command_handl
         genai += 10
     if "tool_registry" in kinds:
         genai += 8
-    if any(s in signals for s in ("token_usage", "cost")):
+    if any(s in signals for s in ("token_usage",)):
         genai += 4
     if any(s in signals for s in ("tool_latency", "tool_errors")):
         genai += 3
@@ -329,7 +329,7 @@ def compute_maturity_score(detected_modules: list[dict[str, Any]], command_handl
 
     if total >= 80:
         level = "advanced"
-        guidance = "Full trace/metric/log pipeline is ready. Focus on custom dashboards, alerting thresholds, and cost optimization."
+        guidance = "Full trace/metric/log pipeline is ready. Focus on custom dashboards, alerting thresholds, and token efficiency."
     elif total >= 50:
         level = "intermediate"
         guidance = "Core signals exist. Recommend adding spanmetrics, token budget tracking, and structured error categorization."

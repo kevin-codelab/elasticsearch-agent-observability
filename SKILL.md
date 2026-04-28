@@ -114,7 +114,7 @@ Framework patch 自动关联 session/turn/tool 到 span。需要目标框架在 
 | 检测配置漂移 | `validate_state.py` |
 | 卸载 | `uninstall.py --confirm` |
 
-统一入口：`cli.py <command>`（init / quickstart / doctor / alert / eval / replay / status / validate / uninstall / scenarios）
+统一入口：`cli.py <command>`（init / quickstart / doctor / alert / eval / replay / session-tail / status / validate / uninstall / scenarios）
 
 ## Boundary
 

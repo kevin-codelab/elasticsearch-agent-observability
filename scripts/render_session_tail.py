@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import sys
@@ -110,6 +111,35 @@ DEFAULT_FIELD_MAP = {{
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _timestamp_to_unix_nano(value: Any) -> int | None:
+    """Convert common timestamp shapes to Unix nanoseconds."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        # Heuristics: ns > 1e17, ms > 1e11, else seconds.
+        if number > 1e17:
+            return int(number)
+        if number > 1e11:
+            return int(number * 1_000_000)
+        if number > 1e9:
+            return int(number * 1_000_000_000)
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return _timestamp_to_unix_nano(int(text))
+    try:
+        normalized = text.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1_000_000_000)
+    except ValueError:
+        return None
 
 
 def _load_field_map() -> dict[str, str]:
@@ -221,11 +251,13 @@ def _map_record(record: dict[str, Any], field_map: dict[str, str]) -> dict[str, 
 
 def _build_otlp_log(document: dict[str, Any]) -> dict[str, Any]:
     """Wrap a flat document into an OTLP/HTTP JSON log payload."""
-    now_ns = str(int(time.time() * 1_000_000_000))
-    attributes = []
-    body_text = document.pop("message", "session_tail event")
+    observed_ns = str(int(time.time() * 1_000_000_000))
+    event_ns = _timestamp_to_unix_nano(document.get("@timestamp")) or int(observed_ns)
+    body_text = document.get("message", "session_tail event")
+    stable_hash = hashlib.sha256(json.dumps(document, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    attributes = [{{"key": "event.hash", "value": {{"stringValue": stable_hash}}}}]
     for key, value in document.items():
-        if key == "@timestamp":
+        if key in ("@timestamp", "message"):
             continue
         if isinstance(value, bool):
             attributes.append({{"key": key, "value": {{"boolValue": value}}}})
@@ -246,11 +278,11 @@ def _build_otlp_log(document: dict[str, Any]) -> dict[str, Any]:
             "scopeLogs": [{{
                 "scope": {{"name": "session-tail"}},
                 "logRecords": [{{
-                    "timeUnixNano": now_ns,
-                    "observedTimeUnixNano": now_ns,
+                    "timeUnixNano": str(event_ns),
+                    "observedTimeUnixNano": observed_ns,
                     "severityNumber": 9,
                     "severityText": "INFO",
-                    "body": {{"stringValue": body_text}},
+                    "body": {{"stringValue": str(body_text)}},
                     "attributes": attributes,
                 }}],
             }}],
@@ -275,29 +307,66 @@ def _post_to_bridge(payload: dict[str, Any], bridge_url: str) -> bool:
 class SessionTailer:
     """Watches JSONL files in a directory, tailing new lines and emitting to bridge."""
 
-    def __init__(self, session_dir: str, pattern: str, field_map: dict[str, str], bridge_url: str):
+    def __init__(
+        self,
+        session_dir: str,
+        pattern: str,
+        field_map: dict[str, str],
+        bridge_url: str,
+        state_file: str,
+        from_end: bool,
+    ):
         self.session_dir = session_dir
         self.pattern = pattern
         self.field_map = field_map
         self.bridge_url = bridge_url
-        self._offsets: dict[str, int] = {{}}  # file path → last read position
+        self.state_file = Path(state_file)
+        self.from_end = from_end
+        self._state: dict[str, dict[str, int]] = self._load_state()
         self._emitted = 0
         self._errors = 0
+
+    def _load_state(self) -> dict[str, dict[str, int]]:
+        try:
+            if self.state_file.exists():
+                data = json.loads(self.state_file.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data.get("files", {{}}) if isinstance(data.get("files"), dict) else {{}}
+        except (OSError, json.JSONDecodeError):
+            pass
+        return {{}}
+
+    def _save_state(self) -> None:
+        try:
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = {{"files": self._state, "updated_at": _now_iso()}}
+            self.state_file.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        except OSError as exc:
+            print(f"[session-tail] failed to persist state: {{exc}}", file=sys.stderr)
 
     def _discover_files(self) -> list[str]:
         full_pattern = os.path.join(self.session_dir, self.pattern)
         return sorted(glob.glob(full_pattern, recursive=True))
 
-    def _tail_file(self, filepath: str) -> list[dict[str, Any]]:
-        records = []
+    def _tail_file(self, filepath: str) -> list[tuple[dict[str, Any], int]]:
+        records: list[tuple[dict[str, Any], int]] = []
         try:
-            size = os.path.getsize(filepath)
+            stat = os.stat(filepath)
+            size = stat.st_size
+            inode = int(stat.st_ino)
         except OSError:
             return records
 
-        last_pos = self._offsets.get(filepath, 0)
-        if size < last_pos:
-            # File was truncated / rotated — re-read from start
+        key = str(Path(filepath).resolve())
+        entry = self._state.get(key, {{}})
+        last_pos = int(entry.get("offset", 0) or 0)
+        last_inode = int(entry.get("inode", inode) or inode)
+        if key not in self._state and self.from_end:
+            self._state[key] = {{"inode": inode, "offset": size}}
+            self._save_state()
+            return records
+        if inode != last_inode or size < last_pos:
+            # File was rotated or truncated — re-read from start.
             last_pos = 0
         if size == last_pos:
             return records
@@ -305,17 +374,28 @@ class SessionTailer:
         try:
             with open(filepath, "r", encoding="utf-8", errors="replace") as f:
                 f.seek(last_pos)
-                for line in f:
-                    line = line.strip()
+                while True:
+                    line = f.readline()
                     if not line:
+                        break
+                    pos_after = f.tell()
+                    stripped = line.strip()
+                    if not stripped:
+                        self._state[key] = {{"inode": inode, "offset": pos_after}}
+                        self._save_state()
                         continue
                     try:
-                        record = json.loads(line)
+                        record = json.loads(stripped)
                         if isinstance(record, dict):
-                            records.append(record)
+                            records.append((record, pos_after))
+                        else:
+                            self._state[key] = {{"inode": inode, "offset": pos_after}}
+                            self._save_state()
                     except json.JSONDecodeError:
-                        pass  # Skip malformed lines
-                self._offsets[filepath] = f.tell()
+                        # Only commit malformed lines after skipping them; valid records are
+                        # committed after a successful bridge POST.
+                        self._state[key] = {{"inode": inode, "offset": pos_after}}
+                        self._save_state()
         except OSError:
             pass
         return records
@@ -325,7 +405,12 @@ class SessionTailer:
         count = 0
         for filepath in self._discover_files():
             records = self._tail_file(filepath)
-            for record in records:
+            key = str(Path(filepath).resolve())
+            try:
+                inode = int(os.stat(filepath).st_ino)
+            except OSError:
+                continue
+            for record, pos_after in records:
                 doc = _map_record(record, self.field_map)
                 # Try to infer session_id from filename if not in the record
                 if "gen_ai.conversation.id" not in doc:
@@ -333,10 +418,13 @@ class SessionTailer:
                     doc["gen_ai.conversation.id"] = fname
                 payload = _build_otlp_log(doc)
                 if _post_to_bridge(payload, self.bridge_url):
+                    self._state[key] = {{"inode": inode, "offset": pos_after}}
+                    self._save_state()
                     count += 1
                     self._emitted += 1
                 else:
                     self._errors += 1
+                    break
         return count
 
     def run_forever(self) -> None:
@@ -357,12 +445,16 @@ def main() -> int:
     parser.add_argument("--session-dir", default=SESSION_DIR, help="Directory containing JSONL session files")
     parser.add_argument("--pattern", default=SESSION_GLOB, help="Glob pattern for session files")
     parser.add_argument("--bridge-url", default=BRIDGE_URL, help="OTLP HTTP bridge URL")
+    parser.add_argument("--state-file", default=str(Path(__file__).parent / ".session_tail_state.json"), help="Persistent offset state file")
+    parser.add_argument("--from-end", action="store_true", help="Start new files from EOF instead of backfilling from the beginning")
+    parser.add_argument("--backfill", action="store_true", help="Start new files from the beginning (default)")
     parser.add_argument("--once", action="store_true", help="Run once and exit (don't tail)")
     args = parser.parse_args()
 
     field_map = _load_field_map()
     bridge = args.bridge_url
-    tailer = SessionTailer(args.session_dir, args.pattern, field_map, bridge)
+    from_end = args.from_end and not args.backfill
+    tailer = SessionTailer(args.session_dir, args.pattern, field_map, bridge, args.state_file, from_end)
 
     if args.once:
         n = tailer.poll_once()
@@ -429,7 +521,8 @@ python generated/agent-otel-bridge.py &
 python session_tail.py \\
     --session-dir /path/to/agent/sessions \\
     --pattern "*.jsonl" \\
-    --bridge-url http://localhost:{bridge_port}
+    --bridge-url http://localhost:{bridge_port} \\
+    --from-end
 ```
 
 Or via environment variables:
@@ -463,8 +556,11 @@ Set `FIELD_MAP_FILE=/path/to/custom_map.json` to use a custom mapping file.
 To process existing files without tailing:
 
 ```bash
-python session_tail.py --once --session-dir /path/to/sessions
+python session_tail.py --once --backfill --session-dir /path/to/sessions
 ```
+
+Offsets are persisted in `.session_tail_state.json`. A record is committed only
+after the bridge accepts it, so temporary bridge failures do not silently drop data.
 
 ## What you get in Kibana
 

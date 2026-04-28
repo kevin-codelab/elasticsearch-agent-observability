@@ -13,7 +13,6 @@ Built-in evaluators:
   - latency_regression: P95 latency vs baseline (per tool / model)
   - error_rate_regression: error rate vs baseline (per tool / model)
   - token_efficiency: tokens per session vs baseline
-  - cost_regression: cost per session vs baseline
   - tool_coverage: fraction of tools that were actually called
   - guardrail_block_rate: fraction of guardrail checks that blocked
 
@@ -59,7 +58,7 @@ EVALUATORS: dict[str, dict[str, str]] = {
     },
     "token_efficiency": {
         "description": "Detect token consumption regression per session vs baseline",
-        "dimension": "cost",
+        "dimension": "efficiency",
     },
     "tool_coverage": {
         "description": "Fraction of known tools that were actually called in the window",
@@ -97,7 +96,6 @@ def _query_window(config: ESConfig, ds_name: str, gte: str, lte: str = "now") ->
             "p95_latency": {"percentiles": {"field": "event.duration", "percents": [95]}},
             "token_sum": {"sum": {"field": "gen_ai.usage.input_tokens"}},
             "token_output_sum": {"sum": {"field": "gen_ai.usage.output_tokens"}},
-            "cost_sum": {"sum": {"field": "gen_ai.agent_ext.cost"}},
             "session_count": {"cardinality": {"field": "gen_ai.conversation.id"}},
             "tool_names": {"terms": {"field": "gen_ai.tool.name", "size": 100}},
             "per_tool_latency": {
@@ -200,27 +198,6 @@ def _eval_token_efficiency(current: dict, baseline: dict, threshold: float = 2.0
         "detail": f"Token efficiency stable ({c_per:,.0f} vs {b_per:,.0f} per session)",
     }
 
-
-def _eval_cost_regression(current: dict, baseline: dict, threshold: float = 2.0) -> dict[str, Any]:
-    """Cost per session vs baseline."""
-    c_aggs = current.get("aggregations", {})
-    b_aggs = baseline.get("aggregations", {})
-    c_cost = c_aggs.get("cost_sum", {}).get("value", 0) or 0
-    c_sessions = max(1, c_aggs.get("session_count", {}).get("value", 0) or 1)
-    b_cost = b_aggs.get("cost_sum", {}).get("value", 0) or 0
-    b_sessions = max(1, b_aggs.get("session_count", {}).get("value", 0) or 1)
-    c_per = c_cost / c_sessions
-    b_per = b_cost / b_sessions
-    if b_per <= 0:
-        return {"outcome": "pass", "score": 1.0, "detail": "No baseline cost data"}
-    ratio = c_per / b_per
-    if ratio > threshold:
-        return {
-            "outcome": "fail",
-            "score": round(max(0, 1 - (ratio - 1) / 10), 2),
-            "detail": f"Cost/session regressed {ratio:.1f}x (${c_per:.4f} vs ${b_per:.4f})",
-        }
-    return {"outcome": "pass", "score": round(min(1.0, 1 / max(0.1, ratio)), 2), "detail": f"Cost stable (${c_per:.4f} vs ${b_per:.4f})"}
 
 
 def _eval_tool_coverage(current: dict, baseline: dict) -> dict[str, Any]:

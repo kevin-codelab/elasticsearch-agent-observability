@@ -48,7 +48,6 @@ These fields extend OTel GenAI Semantic Conventions for agent runtime observabil
 - `gen_ai.agent_ext.component_type` — see above
 - `gen_ai.agent_ext.retry_count` — retry attempts
 - `gen_ai.agent_ext.latency_ms` — explicit latency in milliseconds
-- `gen_ai.agent_ext.cost` — monetary cost of the operation
 - `gen_ai.agent_ext.module` — source module name
 - `gen_ai.agent_ext.module_kind` — module category
 - `gen_ai.agent_ext.semantic_kind` — semantic operation kind
@@ -74,7 +73,7 @@ These fields extend OTel GenAI Semantic Conventions for agent runtime observabil
 - `gen_ai.evaluation.evaluator` — evaluator name
 - `gen_ai.evaluation.score` — numeric score
 - `gen_ai.evaluation.outcome` — `pass` / `fail` / `degraded`
-- `gen_ai.evaluation.dimension` — `quality` / `safety` / `latency` / `cost`
+- `gen_ai.evaluation.dimension` — `quality` / `safety` / `latency` / `efficiency`
 
 ## Reasoning trace fields
 

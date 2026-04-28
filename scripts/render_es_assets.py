@@ -117,7 +117,6 @@ def _ecs_base_properties() -> dict[str, Any]:
         "gen_ai.agent_ext.component_type": {"type": "keyword"},  # runtime / tool / llm / mcp / memory / knowledge / guardrail
         "gen_ai.agent_ext.retry_count": {"type": "integer"},
         "gen_ai.agent_ext.latency_ms": {"type": "float"},
-        "gen_ai.agent_ext.cost": {"type": "double"},
         "gen_ai.agent_ext.module": {"type": "keyword"},
         "gen_ai.agent_ext.module_kind": {"type": "keyword"},
         "gen_ai.agent_ext.semantic_kind": {"type": "keyword"},
@@ -137,7 +136,7 @@ def _ecs_base_properties() -> dict[str, Any]:
         "gen_ai.evaluation.evaluator": {"type": "keyword"},
         "gen_ai.evaluation.score": {"type": "float"},
         "gen_ai.evaluation.outcome": {"type": "keyword"},  # pass / fail / degraded
-        "gen_ai.evaluation.dimension": {"type": "keyword"},  # quality / safety / latency / cost
+        "gen_ai.evaluation.dimension": {"type": "keyword"},  # quality / safety / latency / efficiency
         # --- multi-agent correlation ---
         "gen_ai.agent_ext.parent_agent.id": {"type": "keyword"},
         "gen_ai.agent_ext.causality.trigger_span_id": {"type": "keyword"},
@@ -645,6 +644,49 @@ def _build_lens_table_visualization(
     )
 
 
+def _build_lens_terms_avg_table(
+    *,
+    object_id: str,
+    data_view_id: str,
+    title: str,
+    description: str,
+    bucket_field: str,
+    metric_field: str,
+    metric_label: str,
+    size: int = 10,
+    query: str = "",
+) -> dict[str, Any]:
+    """Top-N table with terms bucket and average metric."""
+    state = _build_lens_state(
+        columns={
+            "col-bucket": {
+                "operationType": "terms",
+                "sourceField": bucket_field,
+                "params": {"size": size, "orderDirection": "desc", "orderBy": {"type": "column", "columnId": "col-metric"}},
+            },
+            "col-metric": {"operationType": "average", "sourceField": metric_field, "label": metric_label, "customLabel": True},
+        },
+        column_order=["col-bucket", "col-metric"],
+        visualization={
+            "layerId": DEFAULT_LENS_LAYER_ID,
+            "layerType": "data",
+            "columns": [
+                {"columnId": "col-bucket", "isTransposed": False},
+                {"columnId": "col-metric", "isTransposed": False},
+            ],
+        },
+        query=query,
+    )
+    return build_lens_saved_object(
+        object_id=object_id,
+        title=title,
+        description=description,
+        visualization_type="lnsDatatable",
+        state=state,
+        data_view_id=data_view_id,
+    )
+
+
 def _build_lens_horizontal_bar(
     *,
     object_id: str,
@@ -1038,11 +1080,14 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
         description="Events per trace for step-by-step replay.",
         source_field="trace.id", metric_label="Count",
     ))
-    objects.append(_build_lens_horizontal_bar(
+    objects.append(_build_lens_terms_avg_table(
         object_id=lens_turn_latency_id, data_view_id=data_view_id,
         title="Turn Latency",
-        description="Latency distribution across turns.",
-        source_field="gen_ai.agent_ext.turn_id", metric_label="Count",
+        description="Average latency by turn.",
+        bucket_field="gen_ai.agent_ext.turn_id",
+        metric_field="gen_ai.agent_ext.latency_ms",
+        metric_label="Avg Latency (ms)",
+        query="gen_ai.agent_ext.turn_id:* and gen_ai.agent_ext.latency_ms:*",
     ))
 
     # =====================================================================

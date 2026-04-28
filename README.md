@@ -23,10 +23,10 @@ Agent side — pick the path that fits your runtime:
 **Agent writes session JSONL** (OpenClaw, Mastra, custom runtimes with session files):
 ```bash
 # Generate the session tail script during quickstart:
-python scripts/render_session_tail.py --output-dir ./generated/session-tail \
+python scripts/cli.py session-tail --output-dir ./generated/session-tail \
     --session-dir /path/to/agent/sessions --bridge-url http://localhost:14319
-# Start tailing (runs alongside the agent):
-python generated/session-tail/session_tail.py
+# Start tailing (runs alongside the agent, only new records by default):
+python generated/session-tail/session_tail.py --from-end
 ```
 
 **Python agents** (CrewAI, LangGraph, AutoGen, LlamaIndex, custom):
@@ -69,7 +69,7 @@ python scripts/cli.py doctor --es-url http://localhost:9200
 bootstrap_observability.py
  → index template + component templates + ILM (hot/warm/cold/delete)
  → ingest pipeline (OTel→ECS normalization, sensitive field redaction)
- → 20 Kibana panels (latency, tokens, tools, sessions, guardrail, eval, feedback, reasoning)
+ → 31 Kibana panels (latency, tokens, tools, sessions, guardrail, eval, feedback, reasoning)
  → OTel Collector config + OTLP HTTP bridge fallback
 ```
 
@@ -130,6 +130,7 @@ python scripts/cli.py <command> [options]
 | `alert` | Alert + RCA (`--webhook-template slack\|dingtalk\|feishu\|wecom`) |
 | `eval` | Run evaluators (`--evaluators llm_judge --llm-judge-endpoint <url>`) |
 | `replay` | Session replay (`--session-id <id>` or `--trace-id <id>`) |
+| `session-tail` | Generate a session JSONL tail bundle |
 | `status` | What's deployed on the cluster |
 | `validate` | Config drift detection |
 | `uninstall` | Remove all managed assets |
