@@ -18,11 +18,32 @@ python scripts/cli.py quickstart \
   --apply --kibana-url http://localhost:5601
 ```
 
-Agent side:
+Agent side — pick the path that fits your runtime:
 
+**Python agents** (CrewAI, LangGraph, AutoGen, LlamaIndex, custom):
+```python
+pip install traceloop-sdk
+```
 ```python
 from traceloop.sdk import Traceloop
 Traceloop.init()
+```
+
+**Node.js / TypeScript agents** (OpenClaw, Mastra, custom):
+```bash
+# Generate the Node bootstrap during quickstart:
+python scripts/cli.py quickstart --agent-dir /path/to/agent --generate-instrument-snippet --instrument-runtime node
+# Then preload it:
+node --import ./generated/node-instrumentation/agent-otel-bootstrap.mjs dist/index.js
+```
+
+**Any language / can't touch code** (Hermes, upstream OSS agents):
+```bash
+# Generate a LLM proxy (LiteLLM docker-compose):
+python scripts/cli.py init --workspace /path/to/agent --output-dir ./generated --generate-llm-proxy --apply-es-assets
+cd generated/llm-proxy && docker compose up -d
+# Point the agent at the proxy:
+export OPENAI_API_BASE=http://localhost:4000/v1
 ```
 
 Done. Data flows into ES, Kibana dashboards are live.
