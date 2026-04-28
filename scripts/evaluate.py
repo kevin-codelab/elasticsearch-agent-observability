@@ -61,10 +61,6 @@ EVALUATORS: dict[str, dict[str, str]] = {
         "description": "Detect token consumption regression per session vs baseline",
         "dimension": "cost",
     },
-    "cost_regression": {
-        "description": "Detect per-session cost increase vs baseline",
-        "dimension": "cost",
-    },
     "tool_coverage": {
         "description": "Fraction of known tools that were actually called in the window",
         "dimension": "quality",
@@ -387,7 +383,6 @@ _EVAL_FUNCTIONS = {
     "latency_regression": _eval_latency_regression,
     "error_rate_regression": _eval_error_rate_regression,
     "token_efficiency": _eval_token_efficiency,
-    "cost_regression": _eval_cost_regression,
     "tool_coverage": _eval_tool_coverage,
     "guardrail_block_rate": _eval_guardrail_block_rate,
     "llm_judge": _eval_llm_judge,

@@ -70,7 +70,6 @@ After install, the skill is ready. The agent reads this `SKILL.md` and knows wha
 |-------|-----|
 | 检查管线健康 | `doctor.py` |
 | 看告警 + 根因 | `alert_and_diagnose.py` |
-| 看成本分布 | `model_pricing.py summary` |
 | 跑回归评估 | `evaluate.py run` |
 | 回放一个 session | `replay.py --session-id <id>` |
 | 看部署了什么 | `status.py` |
@@ -117,7 +116,6 @@ After install, the skill is ready. The agent reads this `SKILL.md` and knows wha
 | 脚本 | 用途 |
 |------|------|
 | `quickstart.py` | 引导式一键设置（自动检测框架） |
-| `model_pricing.py` | 成本查询 / 回填 |
 | `status.py` | 集群资产状态 |
 | `validate_state.py` | 配置漂移检测 |
 | `uninstall.py` | 安全卸载（默认 dry-run） |

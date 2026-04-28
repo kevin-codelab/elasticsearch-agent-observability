@@ -60,7 +60,7 @@ python scripts/cli.py doctor --es-url http://localhost:9200
 bootstrap_observability.py
  → index template + component templates + ILM (hot/warm/cold/delete)
  → ingest pipeline (OTel→ECS normalization, sensitive field redaction)
- → 22 Kibana panels (latency, tokens, cost, tools, sessions, guardrail, eval, feedback, reasoning)
+ → 20 Kibana panels (latency, tokens, tools, sessions, guardrail, eval, feedback, reasoning)
  → OTel Collector config + OTLP HTTP bridge fallback
 ```
 
@@ -68,7 +68,6 @@ bootstrap_observability.py
 |------------|------|
 | **Alerting** | 6 RCA analyzers (error spike, token anomaly, latency regression, session hotspot, retry storm, slow turn) with causal chain merging |
 | **Evaluation** | 7 regression evaluators + LLM-as-Judge, writes `gen_ai.evaluation.*` to ES |
-| **Cost tracking** | Built-in price table (30+ models), cost summary, cost backfill |
 | **User feedback** | `POST /v1/feedback` on the bridge, sentiment + score trend panels |
 | **Reasoning trace** | Records why the agent chose each action (rationale, alternatives, confidence) |
 | **Session replay** | Nested span tree with decision trail + feedback at each step |
@@ -104,7 +103,6 @@ python scripts/cli.py <command> [options]
 | `alert` | Alert + RCA (`--webhook-template slack\|dingtalk\|feishu\|wecom`) |
 | `eval` | Run evaluators (`--evaluators llm_judge --llm-judge-endpoint <url>`) |
 | `replay` | Session replay (`--session-id <id>` or `--trace-id <id>`) |
-| `cost` | Cost summary / enrich / prices |
 | `status` | What's deployed on the cluster |
 | `validate` | Config drift detection |
 | `uninstall` | Remove all managed assets |
@@ -118,7 +116,7 @@ python scripts/cli.py <command> [options]
 |-----------|----------|
 | OTel standard | `gen_ai.request.model`, `gen_ai.tool.name`, `gen_ai.usage.*`, `gen_ai.conversation.id` |
 | ECS standard | `@timestamp`, `event.*`, `service.*`, `trace.id`, `span.id` |
-| Agent extensions | `gen_ai.agent_ext.reasoning.*`, `gen_ai.agent_ext.cost`, `gen_ai.agent_ext.turn_id` |
+| Agent extensions | `gen_ai.agent_ext.reasoning.*`, `gen_ai.agent_ext.turn_id`, `gen_ai.agent_ext.component_type` |
 | Evaluation | `gen_ai.evaluation.score`, `gen_ai.evaluation.outcome`, `gen_ai.evaluation.dimension` |
 | Feedback | `gen_ai.feedback.score`, `gen_ai.feedback.sentiment`, `gen_ai.feedback.comment` |
 | Guardrail | `gen_ai.guardrail.action`, `gen_ai.guardrail.category` |

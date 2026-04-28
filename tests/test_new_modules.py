@@ -22,7 +22,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 class CLITests(unittest.TestCase):
     def test_commands_dict_has_required_entries(self) -> None:
         from cli import COMMANDS
-        required = {"init", "quickstart", "status", "doctor", "alert", "cost", "eval", "replay", "query", "report", "validate", "uninstall"}
+        required = {"init", "quickstart", "status", "doctor", "alert", "eval", "replay", "query", "report", "validate", "uninstall"}
         self.assertTrue(required.issubset(set(COMMANDS.keys())), f"Missing: {required - set(COMMANDS.keys())}")
 
     def test_commands_values_are_tuples(self) -> None:
@@ -56,75 +56,13 @@ class CLITests(unittest.TestCase):
 
 
 # =========================================================================
-# Model pricing tests
-# =========================================================================
-
-class ModelPricingTests(unittest.TestCase):
-    def test_default_prices_has_entries(self) -> None:
-        from model_pricing import DEFAULT_PRICES
-        self.assertGreater(len(DEFAULT_PRICES), 20)
-
-    def test_default_prices_values_are_tuples(self) -> None:
-        from model_pricing import DEFAULT_PRICES
-        for model, price in DEFAULT_PRICES.items():
-            self.assertIsInstance(price, tuple, f"{model} price is not a tuple")
-            self.assertEqual(len(price), 2, f"{model} tuple length != 2")
-            self.assertGreaterEqual(price[0], 0, f"{model} input price < 0")
-            self.assertGreaterEqual(price[1], 0, f"{model} output price < 0")
-
-    def test_match_price_exact(self) -> None:
-        from model_pricing import match_price, DEFAULT_PRICES
-        result = match_price("gpt-4o-mini", DEFAULT_PRICES)
-        self.assertIsNotNone(result)
-        self.assertEqual(result, (0.15, 0.60))
-
-    def test_match_price_prefix(self) -> None:
-        from model_pricing import match_price, DEFAULT_PRICES
-        result = match_price("gpt-4o-mini-2025-01-01", DEFAULT_PRICES)
-        self.assertIsNotNone(result)
-
-    def test_match_price_unknown(self) -> None:
-        from model_pricing import match_price, DEFAULT_PRICES
-        result = match_price("totally-unknown-model", DEFAULT_PRICES)
-        self.assertIsNone(result)
-
-    def test_compute_cost(self) -> None:
-        from model_pricing import compute_cost
-        cost = compute_cost(1_000_000, 500_000, "gpt-4o-mini")
-        self.assertIsNotNone(cost)
-        # input: 1M * 0.15/1M = 0.15, output: 0.5M * 0.60/1M = 0.30, total = 0.45
-        self.assertAlmostEqual(cost, 0.45, places=2)
-
-    def test_compute_cost_unknown_model(self) -> None:
-        from model_pricing import compute_cost
-        cost = compute_cost(1000, 1000, "unknown-model-xyz")
-        self.assertIsNone(cost)
-
-    def test_load_prices_no_custom(self) -> None:
-        from model_pricing import load_prices, DEFAULT_PRICES
-        prices = load_prices(None)
-        self.assertEqual(len(prices), len(DEFAULT_PRICES))
-
-    def test_load_prices_with_custom(self) -> None:
-        from model_pricing import load_prices
-        custom = {"my-custom-model": {"input": 1.0, "output": 2.0}}
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(custom, f)
-            f.flush()
-            prices = load_prices(f.name)
-        self.assertIn("my-custom-model", prices)
-        self.assertEqual(prices["my-custom-model"], (1.0, 2.0))
-        Path(f.name).unlink(missing_ok=True)
-
-
-# =========================================================================
 # Evaluate tests
 # =========================================================================
 
 class EvaluateTests(unittest.TestCase):
     def test_evaluators_registry_has_entries(self) -> None:
         from evaluate import EVALUATORS
-        self.assertGreaterEqual(len(EVALUATORS), 7)
+        self.assertGreaterEqual(len(EVALUATORS), 6)
         self.assertIn("llm_judge", EVALUATORS)
 
     def test_eval_functions_match_registry(self) -> None:
