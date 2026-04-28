@@ -75,8 +75,23 @@ FRAMEWORK_SIGNATURES: dict[str, dict[str, Any]] = {
 }
 
 
-def _detect_framework(agent_dir: Path) -> str | None:
-    """Scan agent_dir for framework signatures. Returns framework key or None."""
+def _detect_framework_with_evidence(agent_dir: Path) -> dict[str, Any]:
+    """Scan agent_dir for framework signatures and explain the match."""
+    matches: list[dict[str, str]] = []
+
+    def _record(framework: str, source: str, path: Path, match_type: str, value: str) -> None:
+        matches.append(
+            {
+                "framework": framework,
+                "label": FRAMEWORK_SIGNATURES[framework]["label"],
+                "runtime": FRAMEWORK_SIGNATURES[framework]["runtime"],
+                "source": source,
+                "path": str(path.relative_to(agent_dir)),
+                "match_type": match_type,
+                "value": value,
+            }
+        )
+
     # Check Python requirements
     for req_file in ("requirements.txt", "pyproject.toml", "setup.cfg", "Pipfile"):
         path = agent_dir / req_file
@@ -88,7 +103,8 @@ def _detect_framework(agent_dir: Path) -> str | None:
             for fw_key, fw_info in FRAMEWORK_SIGNATURES.items():
                 for pkg in fw_info["packages"]:
                     if pkg.lower() in content:
-                        return fw_key
+                        _record(fw_key, "python-dependency", path, "package", pkg)
+                        return _build_detection_result(matches)
 
     # Check Node.js package.json
     pkg_json = agent_dir / "package.json"
@@ -100,7 +116,8 @@ def _detect_framework(agent_dir: Path) -> str | None:
             for fw_key, fw_info in FRAMEWORK_SIGNATURES.items():
                 for pkg_name in fw_info["packages"]:
                     if pkg_name.lower() in dep_names:
-                        return fw_key
+                        _record(fw_key, "node-dependency", pkg_json, "package", pkg_name)
+                        return _build_detection_result(matches)
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -114,9 +131,62 @@ def _detect_framework(agent_dir: Path) -> str | None:
         for fw_key, fw_info in FRAMEWORK_SIGNATURES.items():
             for imp in fw_info["imports"]:
                 if f"import {imp}" in content or f"from {imp}" in content:
-                    return fw_key
+                    _record(fw_key, "python-import", py_file, "import", imp)
+                    return _build_detection_result(matches)
 
-    return None
+    return _build_detection_result(matches)
+
+
+def _build_detection_result(matches: list[dict[str, str]]) -> dict[str, Any]:
+    if not matches:
+        return {
+            "framework": None,
+            "matches": [],
+            "recommended_runtime": "python",
+            "recommended_path": "generic-bootstrap",
+            "why": "No known framework signature matched dependency or import scans.",
+        }
+    selected = matches[0]
+    framework = selected["framework"]
+    runtime = selected["runtime"]
+    if framework == "openclaw":
+        recommended_path = "session-tail-first"
+        why = "OpenClaw often has session JSONL or non-standard providers; session-tail is the least invasive first path."
+    elif runtime == "node":
+        recommended_path = "node-preload-and-wrappers"
+        why = "Detected a Node/TypeScript framework; use preload for HTTP spans and wrappers for GenAI semantic fields."
+    else:
+        recommended_path = "python-bootstrap-and-wrappers"
+        why = "Detected a Python framework; use the generated bootstrap plus wrappers for tool/model call sites."
+    return {
+        "framework": framework,
+        "matches": matches,
+        "recommended_runtime": runtime,
+        "recommended_path": recommended_path,
+        "why": why,
+    }
+
+
+def _detect_framework(agent_dir: Path) -> str | None:
+    """Scan agent_dir for framework signatures. Returns framework key or None."""
+    result = _detect_framework_with_evidence(agent_dir)
+    framework = result.get("framework")
+    return str(framework) if framework else None
+
+
+def _print_detection_explanation(detection: dict[str, Any]) -> None:
+    framework = detection.get("framework")
+    matches = detection.get("matches") or []
+    if not framework:
+        print(f"   why: {detection.get('why')}")
+        return
+    print(f"   why: {detection.get('why')}")
+    for match in matches[:3]:
+        print(
+            "   evidence: "
+            f"{match['source']} `{match['path']}` matched {match['match_type']} `{match['value']}`"
+        )
+    print(f"   recommended path: {detection.get('recommended_path')}")
 
 
 def _generate_framework_guide(framework: str, output_dir: Path) -> Path:
@@ -446,17 +516,22 @@ def main() -> int:
         # --- Detect framework ---
         framework = args.framework
         if framework == "auto":
-            detected = _detect_framework(agent_dir)
+            detection = _detect_framework_with_evidence(agent_dir)
+            detected = detection.get("framework")
             if detected:
                 fw_info = FRAMEWORK_SIGNATURES[detected]
-                framework = detected
+                framework = str(detected)
                 print(f"🔍 Detected framework: {fw_info['label']}")
+                _print_detection_explanation(detection)
             else:
                 framework = "generic"
                 print("🔍 No known framework detected; using generic setup.")
+                _print_detection_explanation(detection)
         else:
             fw_info = FRAMEWORK_SIGNATURES.get(framework, {})
             print(f"📦 Framework: {fw_info.get('label', framework)}")
+            runtime_hint = fw_info.get("runtime", "python")
+            print(f"   why: user override via --framework; runtime path `{runtime_hint}`")
 
         ensure_dir(output_dir)
 

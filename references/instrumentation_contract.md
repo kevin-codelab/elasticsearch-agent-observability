@@ -1,6 +1,7 @@
 # Instrumentation Contract
 
 The full field dictionary lives in [`telemetry_schema.md`](telemetry_schema.md).
+The small machine-readable Tier 2 / Tier 3 manifest lives in `scripts/field_manifest.py` and is used by `doctor.py`.
 This file answers a different question: **which fields power which part of the generated pipeline, and in what order should an agent emit them.**
 
 ## The three tiers

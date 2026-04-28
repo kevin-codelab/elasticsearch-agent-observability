@@ -11,6 +11,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import bootstrap_observability  # noqa: E402
 import common  # noqa: E402
+import field_manifest  # noqa: E402
 import generate_report  # noqa: E402
 import render_collector_config  # noqa: E402
 import render_elastic_agent_assets  # noqa: E402
@@ -31,6 +32,16 @@ DISCOVERY_SAMPLE = {
 
 
 class ContractsAndSecurityTests(unittest.TestCase):
+    def test_field_manifest_is_machine_readable_and_doc_referenced(self) -> None:
+        self.assertIn("gen_ai.tool.name", field_manifest.TIER2_FIELDS)
+        self.assertIn("gen_ai.operation.name", field_manifest.TIER2_FIELDS)
+        self.assertEqual(field_manifest.FIELD_MANIFEST["gen_ai.tool.name"]["tier"], 2)
+        self.assertEqual(field_manifest.FIELD_MANIFEST["gen_ai.operation.name"]["tier"], 2)
+        contract = (REPO_ROOT / "references" / "instrumentation_contract.md").read_text(encoding="utf-8")
+        for field in field_manifest.TIER2_FIELDS:
+            self.assertIn(field, contract)
+        self.assertIn("scripts/field_manifest.py", contract)
+
     def test_render_config_uses_env_placeholders_by_default(self) -> None:
         rendered = render_collector_config.render_config(
             DISCOVERY_SAMPLE,

@@ -299,6 +299,28 @@ class QuickstartTests(unittest.TestCase):
             result = _detect_framework(Path(tmpdir))
         self.assertEqual(result, "crewai")
 
+    def test_detect_framework_with_evidence_explains_match(self) -> None:
+        from quickstart import _detect_framework_with_evidence
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "requirements.txt").write_text("crewai>=0.50\n")
+            result = _detect_framework_with_evidence(Path(tmpdir))
+        self.assertEqual(result["framework"], "crewai")
+        self.assertEqual(result["recommended_runtime"], "python")
+        self.assertEqual(result["recommended_path"], "python-bootstrap-and-wrappers")
+        self.assertEqual(result["matches"][0]["path"], "requirements.txt")
+        self.assertEqual(result["matches"][0]["match_type"], "package")
+
+    def test_detect_framework_with_evidence_recommends_session_tail_for_openclaw(self) -> None:
+        from quickstart import _detect_framework_with_evidence
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pkg = {"dependencies": {"openclaw": "^1.0.0"}}
+            (Path(tmpdir) / "package.json").write_text(json.dumps(pkg), encoding="utf-8")
+            result = _detect_framework_with_evidence(Path(tmpdir))
+        self.assertEqual(result["framework"], "openclaw")
+        self.assertEqual(result["recommended_runtime"], "node")
+        self.assertEqual(result["recommended_path"], "session-tail-first")
+        self.assertIn("session-tail", result["why"])
+
     def test_detect_framework_langgraph(self) -> None:
         from quickstart import _detect_framework
         with tempfile.TemporaryDirectory() as tmpdir:
