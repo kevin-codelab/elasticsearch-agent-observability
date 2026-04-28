@@ -336,6 +336,28 @@ class QuickstartTests(unittest.TestCase):
             result = _detect_framework(Path(tmpdir))
         self.assertEqual(result, "openclaw")
 
+    def test_quickstart_persists_detection_evidence(self) -> None:
+        import bootstrap_observability
+        import quickstart
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            agent_dir = root / "agent"
+            output_dir = root / "out"
+            agent_dir.mkdir()
+            (agent_dir / "requirements.txt").write_text("crewai>=0.50\n", encoding="utf-8")
+            argv = ["quickstart", "--agent-dir", str(agent_dir), "--output-dir", str(output_dir)]
+            with patch("sys.argv", argv):
+                with patch.object(bootstrap_observability, "main", return_value=0):
+                    code = quickstart.main()
+            evidence = json.loads((output_dir / quickstart.DETECTION_EVIDENCE_FILENAME).read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(evidence["framework"], "crewai")
+        self.assertEqual(evidence["selected_framework"], "crewai")
+        self.assertEqual(evidence["matches"][0]["path"], "requirements.txt")
+        self.assertEqual(evidence["recommended_path"], "python-bootstrap-and-wrappers")
+
 
 # =========================================================================
 # Session tail renderer tests

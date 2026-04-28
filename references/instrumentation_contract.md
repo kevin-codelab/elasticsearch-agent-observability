@@ -15,6 +15,35 @@ This file answers a different question: **which fields power which part of the g
 The generated Kibana dashboard and the `alert_and_diagnose.py` rules are layered so each tier adds more usable views.
 **If Tier 2 is empty, some dashboard panels stay empty.** That is the intended signal — don't paper over it with fake data.
 
+## Manifest-backed coverage fields
+
+This section is generated from `scripts/field_manifest.py`. `doctor.py` uses the same manifest for instrumentation coverage checks.
+
+### Tier 2
+
+| Field | Label | Powers |
+|---|---|---|
+| `gen_ai.tool.name` | tool name | tool-level latency/error panels, error_rate_spike diagnosis |
+| `gen_ai.conversation.id` | session / conversation ID | session_failure_hotspot alert, session drill-down |
+| `gen_ai.agent_ext.turn_id` | turn ID | long_turn_hotspot alert, turn-level diffing |
+| `gen_ai.agent_ext.component_type` | component type | per-component dashboards, every alert filter |
+| `gen_ai.operation.name` | OTel GenAI operation | operation mix panels, GenAI semconv compatibility |
+
+### Tier 3
+
+| Field | Label | Powers |
+|---|---|---|
+| `gen_ai.provider.name` | GenAI provider | provider-level routing and model diagnostics |
+| `gen_ai.request.model` | request model | model distribution, model latency, token analysis |
+| `gen_ai.usage.input_tokens` | input tokens | token usage trend and token spike investigations |
+| `gen_ai.usage.output_tokens` | output tokens | token usage trend and token spike investigations |
+| `mcp.method.name` | MCP method | MCP tool-call drilldown and alert grouping |
+| `gen_ai.evaluation.name` | OTel evaluation name | standard GenAI evaluation event compatibility |
+| `gen_ai.agent_ext.retry_count` | retry count | retry_storm alert |
+| `error.type` | error type classification | diagnosis phrasing (timeout vs application-level) |
+| `gen_ai.agent_ext.reasoning.action` | reasoning trace | reasoning panels, session trace decision trail |
+| `gen_ai.feedback.score` | user feedback | feedback sentiment/score panels |
+
 ## Tier 1 — baseline (free after bootstrap)
 
 Provided by the OTel Collector config, HTTP auto-instrumentation, or the LLM proxy.

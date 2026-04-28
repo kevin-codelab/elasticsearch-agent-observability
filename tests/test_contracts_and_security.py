@@ -38,7 +38,8 @@ class ContractsAndSecurityTests(unittest.TestCase):
         self.assertEqual(field_manifest.FIELD_MANIFEST["gen_ai.tool.name"]["tier"], 2)
         self.assertEqual(field_manifest.FIELD_MANIFEST["gen_ai.operation.name"]["tier"], 2)
         contract = (REPO_ROOT / "references" / "instrumentation_contract.md").read_text(encoding="utf-8")
-        for field in field_manifest.TIER2_FIELDS:
+        self.assertIn(field_manifest.render_contract_section(), contract)
+        for field in field_manifest.FIELD_MANIFEST:
             self.assertIn(field, contract)
         self.assertIn("scripts/field_manifest.py", contract)
 

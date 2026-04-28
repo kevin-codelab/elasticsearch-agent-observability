@@ -112,3 +112,35 @@ FIELD_MANIFEST: dict[str, dict[str, Any]] = {
     **TIER2_FIELDS,
     **TIER3_FIELDS,
 }
+
+
+def fields_for_tier(tier: int) -> dict[str, dict[str, Any]]:
+    """Return manifest entries for one instrumentation tier."""
+    return {field: meta for field, meta in FIELD_MANIFEST.items() if meta["tier"] == tier}
+
+
+def render_markdown_table(tier: int) -> str:
+    """Render a stable Markdown table for docs/tests."""
+    rows = ["| Field | Label | Powers |", "|---|---|---|"]
+    for field, meta in fields_for_tier(tier).items():
+        rows.append(f"| `{field}` | {meta['label']} | {meta['powers']} |")
+    return "\n".join(rows)
+
+
+def render_contract_section() -> str:
+    """Render the docs section backed by this manifest."""
+    return "\n".join(
+        [
+            "## Manifest-backed coverage fields",
+            "",
+            "This section is generated from `scripts/field_manifest.py`. `doctor.py` uses the same manifest for instrumentation coverage checks.",
+            "",
+            "### Tier 2",
+            "",
+            render_markdown_table(2),
+            "",
+            "### Tier 3",
+            "",
+            render_markdown_table(3),
+        ]
+    )

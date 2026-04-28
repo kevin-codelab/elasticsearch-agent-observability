@@ -22,8 +22,11 @@ from common import (
     ensure_dir,
     print_error,
     validate_workspace_dir,
+    write_json,
     write_text,
 )
+
+DETECTION_EVIDENCE_FILENAME = "quickstart-detection.json"
 
 # Supported framework detection patterns.
 FRAMEWORK_SIGNATURES: dict[str, dict[str, Any]] = {
@@ -169,6 +172,34 @@ def _detect_framework(agent_dir: Path) -> str | None:
     result = _detect_framework_with_evidence(agent_dir)
     framework = result.get("framework")
     return str(framework) if framework else None
+
+
+def _manual_detection_result(framework: str) -> dict[str, Any]:
+    fw_info = FRAMEWORK_SIGNATURES.get(framework, {})
+    runtime = fw_info.get("runtime", "python")
+    if framework == "openclaw":
+        recommended_path = "session-tail-first"
+    elif runtime == "node":
+        recommended_path = "node-preload-and-wrappers"
+    else:
+        recommended_path = "python-bootstrap-and-wrappers"
+    return {
+        "framework": framework,
+        "matches": [],
+        "recommended_runtime": runtime,
+        "recommended_path": recommended_path,
+        "why": "User override via --framework; no auto-detection evidence was used.",
+        "source": "user_override",
+    }
+
+
+def _persist_detection_evidence(output_dir: Path, detection: dict[str, Any], *, selected_framework: str, agent_dir: Path) -> Path:
+    payload = dict(detection)
+    payload["selected_framework"] = selected_framework
+    payload["agent_dir"] = str(agent_dir)
+    path = output_dir / DETECTION_EVIDENCE_FILENAME
+    write_json(path, payload)
+    return path
 
 
 def _print_detection_explanation(detection: dict[str, Any]) -> None:
@@ -525,12 +556,15 @@ def main() -> int:
                 print("🔍 No known framework detected; using generic setup.")
                 _print_detection_explanation(detection)
         else:
+            detection = _manual_detection_result(framework)
             fw_info = FRAMEWORK_SIGNATURES.get(framework, {})
             print(f"📦 Framework: {fw_info.get('label', framework)}")
             runtime_hint = fw_info.get("runtime", "python")
             print(f"   why: user override via --framework; runtime path `{runtime_hint}`")
 
         ensure_dir(output_dir)
+        detection_path = _persist_detection_evidence(output_dir, detection, selected_framework=framework, agent_dir=agent_dir)
+        print(f"   🧭 Detection evidence: {detection_path}")
 
         # --- Generate framework-specific guide ---
         guide_path = _generate_framework_guide(framework, output_dir)

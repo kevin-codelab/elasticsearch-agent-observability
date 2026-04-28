@@ -103,6 +103,51 @@ class GeneratedAssetSnapshotTests(unittest.TestCase):
     def test_generated_asset_digests_match_reviewed_snapshots(self) -> None:
         self.assertEqual(_current_digests(), EXPECTED_DIGESTS)
 
+    def test_generated_assets_keep_critical_semantics(self) -> None:
+        pipeline = render_es_assets.build_ingest_pipeline(MODULES)
+        removed_fields = {proc["remove"]["field"] for proc in pipeline["processors"] if "remove" in proc}
+        for field in {
+            "gen_ai.input.messages",
+            "gen_ai.output.messages",
+            "gen_ai.system_instructions",
+            "gen_ai.tool.call.arguments",
+            "gen_ai.tool.call.result",
+            "tool_args",
+            "tool_result",
+        }:
+            self.assertIn(field, removed_fields)
+
+        kibana = render_es_assets.build_kibana_saved_objects("agent-obsv")
+        self.assertIn("trace_timeline_id", kibana["summary"])
+        self.assertIn("mcp_search_id", kibana["summary"])
+        self.assertGreaterEqual(len(kibana["summary"]["lens_ids"]), 20)
+
+        investigations = render_es_assets.build_investigation_queries("agent-obsv")
+        self.assertTrue(any("mcp.method.name" in item["query"] for item in investigations["queries"]))
+        self.assertTrue(all("COUNT(*) WHERE" not in item["query"] for item in investigations["queries"]))
+
+        alert_specs = render_es_assets.build_alert_rule_specs("agent-obsv")
+        self.assertTrue(any("not event.dataset:internal.*" in rule["query"] for rule in alert_specs["rules"]))
+
+        python_snippet = render_instrument_snippet.render_instrument_snippet(
+            DISCOVERY,
+            service_name="agent-runtime",
+            environment="dev",
+            otlp_endpoint="http://127.0.0.1:4317",
+            index_prefix="agent-obsv",
+        )
+        for token in ("gen_ai.operation.name", "mcp.method.name", "gen_ai.response.id", "gen_ai.usage.cache_read.input_tokens"):
+            self.assertIn(token, python_snippet)
+
+    def test_session_tail_bundle_keeps_semantic_field_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = render_session_tail.render_session_tail_bundle(Path(tmp_dir), service_name="agent-runtime")
+            field_map = json.loads(paths["field_map"].read_text(encoding="utf-8"))
+        self.assertEqual(field_map["mcp_method"], "mcp.method.name")
+        self.assertEqual(field_map["response_id"], "gen_ai.response.id")
+        self.assertEqual(field_map["cache_read_input_tokens"], "gen_ai.usage.cache_read.input_tokens")
+        self.assertEqual(field_map["operation_name"], "gen_ai.operation.name")
+
 
 if __name__ == "__main__":
     unittest.main()
