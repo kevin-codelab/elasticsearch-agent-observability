@@ -1,35 +1,44 @@
 # elasticsearch-agent-observability
 
-Use Elasticsearch + Kibana to observe AI agents without patching Elasticsearch or Kibana.
+Your agent is in production. A user reports a bad answer. Latency spikes. Token usage jumps. A tool starts failing.
 
-This repo gives you the Elastic-side pieces for agent telemetry: data stream, mappings, ingest pipeline, Kibana dashboard/searches, ES|QL investigation queries, query-rule templates, and small helper scripts for diagnosis/evaluation.
+If your team already uses Elasticsearch and Kibana, you should not need a new observability platform just to answer the first questions:
 
-It is useful when you already have, or are willing to run, Elasticsearch/Kibana and want to answer questions like:
+- Which session failed?
+- Which tool or model caused it?
+- Did token usage, latency, or retries change?
+- Is telemetry reaching Elasticsearch at all?
+- Can we inspect this in Kibana without storing raw prompts by default?
 
-| Question | Where this repo helps |
+`elasticsearch-agent-observability` gives you that Elastic-native starting point for AI agent telemetry.
+
+It does not modify Elasticsearch or Kibana. It renders assets and helper scripts that use public APIs: Elasticsearch data streams, ingest pipelines, index templates, Kibana saved objects, Discover, Lens, ES|QL, Query Rules, and OTLP.
+
+## What you get after bootstrap
+
+| Need | What this repo gives you |
 |---|---|
-| Which agent session failed, and where did it fail? | Discover searches, session drilldown, trace timeline |
-| Which tool/model is slow or noisy? | Kibana dashboard, ES|QL investigations, alert checks |
-| Why did token usage jump? | Token panels, token-spike ES|QL query, model/session breakdown |
-| Is telemetry actually reaching ES? | `doctor`, canary check, field coverage report |
-| How do I connect an existing agent with minimal changes? | session-tail, LLM proxy, Python/Node instrumentation starters |
-| Can I keep prompts/tool args out of ES? | bridge + ingest redaction defaults |
+| See agent traffic in Elastic | data stream, ECS/OTel GenAI mappings, ingest pipeline |
+| Debug bad sessions | Discover searches, session drilldown, trace timeline |
+| Find slow or failing components | Kibana Lens dashboard, tool/model/component breakdowns |
+| Investigate token spikes | ES|QL queries for token, model, and session hotspots |
+| Catch regressions | alert checks and Query Rule templates for error/latency/token/retry patterns |
+| Check pipeline health | `doctor` canary, recent-data check, field coverage report |
+| Connect existing agents | Python/Node starters, session-tail, LiteLLM proxy, Collector config |
+| Keep sensitive payloads out | bridge + ingest redaction for prompts, messages, tool args/results |
 
-**Python 3.10+, stdlib scripts, Elasticsearch/Kibana Basic license.**
+This is the Elastic-side data layer and investigation pack. It is not an agent runtime, prompt manager, eval SaaS, or replacement for Kibana.
 
-## What it installs
+## Who this is for
 
-`quickstart` / `init` can generate and optionally apply:
+Use it if:
 
-- Elasticsearch data stream, component templates, index template, ILM policy
-- ingest pipeline for OTel/ECS normalization and sensitive field redaction
-- Kibana data view, dashboard, Lens panels, and Discover saved searches
-- ES|QL investigation pack for slow answers, failed sessions, token spikes, MCP calls, and feedback
-- Kibana Query Rule reference payloads
-- OTel Collector config and OTLP HTTP bridge fallback
-- Python / Node instrumentation starters, session-tail bundle, and optional LLM proxy bundle
+- you already run Elasticsearch/Kibana, or plan to;
+- you want agent observability in your existing Elastic stack;
+- you prefer OTel GenAI-aligned fields over vendor-specific traces;
+- you need practical session/tool/model/token visibility before building a full observability product.
 
-It uses public APIs only. No Elasticsearch or Kibana source changes.
+Do not use it if you want hosted prompt management, annotation queues, experiment tracking, or a turnkey UI product. This repo intentionally stays close to Elastic primitives.
 
 ## Quick start
 
@@ -43,65 +52,65 @@ python scripts/cli.py quickstart \
   --apply --kibana-url http://localhost:5601
 ```
 
-Then verify the pipeline:
+Then verify the path end to end:
 
 ```bash
 python scripts/cli.py doctor --es-url http://localhost:9200
 ```
 
-`doctor` checks more than `/healthz`: listener state, recent ES data, canary ingestion, mappings, Kibana assets, and missing GenAI fields.
+`doctor` does not trust `/healthz` alone. It checks listeners, recent ES data, canary ingestion, mappings, Kibana assets, and missing GenAI fields.
 
-## Pick an ingestion path
+## Choose the least invasive ingest path
 
-| Agent shape | Recommended path | What you get |
+| Agent shape | Start here | Notes |
 |---|---|---|
-| Agent writes session JSONL | `session-tail` | session/model/tool/tokens from files, no agent code changes when the JSONL shape matches |
-| Python agent | generated Python bootstrap + wrappers | OTel spans/logs, model/tool/session fields where wrappers are used |
-| Node / TypeScript agent | `node --import` bootstrap + wrappers | HTTP spans from preload, GenAI fields from wrappers |
-| Third-party agent you do not want to edit | LiteLLM proxy | model latency/tokens/errors for compatible OpenAI-style calls |
-| Existing OTel setup | Collector config / direct OTLP | reuse current telemetry and normalize into the ES data stream |
+| Writes session JSONL | `session-tail` | good for OpenClaw, Mastra, custom runtimes with session files |
+| Python agent | Python bootstrap + wrappers | use OTel/OpenLLMetry where possible; wrap custom tool/model calls |
+| Node / TypeScript agent | `node --import` bootstrap + wrappers | preload captures HTTP; wrappers add GenAI semantic fields |
+| Third-party agent you do not want to edit | LiteLLM proxy | works when the agent can use an OpenAI-compatible base URL |
+| Existing OTel setup | Collector / direct OTLP | reuse what you already emit and normalize into the ES data stream |
 
-Session-tail example:
+Examples:
 
 ```bash
+# Session JSONL → OTLP bridge
 python scripts/cli.py session-tail \
   --output-dir ./generated/session-tail \
   --session-dir /path/to/agent/sessions \
   --bridge-url http://localhost:14319
-
 python generated/session-tail/session_tail.py --from-end
 ```
 
-Python example:
-
 ```bash
-pip install traceloop-sdk
-```
-
-```python
-from traceloop.sdk import Traceloop
-Traceloop.init()
-```
-
-Node example:
-
-```bash
+# Node / TypeScript preload
 python scripts/cli.py quickstart --agent-dir /path/to/agent --instrument-runtime node
 node --import ./generated/node-instrumentation/agent-otel-bootstrap.mjs dist/index.js
 ```
 
-Proxy example:
-
 ```bash
+# LLM proxy for compatible third-party agents
 python scripts/cli.py init \
   --workspace /path/to/agent \
   --output-dir ./generated \
   --generate-llm-proxy \
   --apply-es-assets
-
 cd generated/llm-proxy && docker compose up -d
 export OPENAI_API_BASE=http://localhost:4000/v1
 ```
+
+## What gets generated
+
+`quickstart` / `init` can produce:
+
+- Elasticsearch component templates, index template, ILM policy, and data stream
+- ingest pipeline for OTel/ECS normalization and sensitive field redaction
+- Kibana data view, dashboard, Lens panels, and Discover saved searches
+- ES|QL investigation pack for slow answers, failed sessions, token spikes, MCP calls, and feedback
+- Kibana Query Rule reference payloads
+- OTel Collector config and OTLP HTTP bridge fallback
+- Python / Node instrumentation starters
+- session-tail bundle and optional LiteLLM proxy bundle
+- detection evidence file explaining why quickstart chose a path
 
 ## Main commands
 
@@ -111,9 +120,9 @@ python scripts/cli.py <command> [options]
 
 | Command | Use it for |
 |---|---|
-| `quickstart` | detect a known framework, generate assets, and print why it chose that path |
+| `quickstart` | detect a known framework, generate assets, and explain the choice |
 | `init` | generate/apply ES, Kibana, Collector, bridge, proxy, and instrumentation assets |
-| `doctor` | check whether the telemetry pipeline is alive and which fields are missing |
+| `doctor` | check whether telemetry is flowing and which fields are missing |
 | `session-tail` | generate a JSONL tailer for file-based agent sessions |
 | `alert` | run field-based checks for error spikes, latency regressions, token anomalies, retry storms |
 | `eval` | write lightweight regression evaluation events into ES |
@@ -122,32 +131,26 @@ python scripts/cli.py <command> [options]
 | `validate` | compare generated assets with live cluster assets |
 | `uninstall` | remove managed assets |
 
-## Data contract
+## Field contract
 
 The schema follows [OTel GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where they fit. Project-only fields stay under `gen_ai.agent_ext.*`.
 
-Important fields:
+The fields that matter first:
 
-- model/provider: `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`
-- token usage: `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, cache token fields
-- session/turn: `gen_ai.conversation.id`, `gen_ai.agent_ext.turn_id`
-- tool/MCP: `gen_ai.tool.name`, `gen_ai.operation.name=execute_tool`, `mcp.method.name`
-- diagnosis: `event.outcome`, `error.type`, `gen_ai.agent_ext.retry_count`, `gen_ai.agent_ext.latency_ms`
-- optional product signals: `gen_ai.evaluation.*`, `gen_ai.feedback.*`, `gen_ai.guardrail.*`
+- session: `gen_ai.conversation.id`, `gen_ai.agent_ext.turn_id`
+- tool/model: `gen_ai.tool.name`, `gen_ai.request.model`, `gen_ai.provider.name`
+- operation: `gen_ai.operation.name` (`chat`, `invoke_agent`, `execute_tool`, etc.)
+- cost/latency: `gen_ai.usage.*`, `event.duration`, `gen_ai.agent_ext.latency_ms`
+- diagnosis: `event.outcome`, `error.type`, `gen_ai.agent_ext.retry_count`
+- optional signals: `gen_ai.evaluation.*`, `gen_ai.feedback.*`, `gen_ai.guardrail.*`, MCP fields
 
-Full dictionary: [`references/telemetry_schema.md`](references/telemetry_schema.md). Field tiers: [`references/instrumentation_contract.md`](references/instrumentation_contract.md).
+Full dictionary: [`references/telemetry_schema.md`](references/telemetry_schema.md). Coverage tiers: [`references/instrumentation_contract.md`](references/instrumentation_contract.md).
 
 ## Privacy defaults
 
 Raw GenAI payloads are off by default.
 
 The bridge and ingest pipeline remove raw prompts, completions, chat messages, system instructions, tool definitions, tool arguments, and tool results. If you need payload capture, add an explicit opt-in path, truncation, PII filtering, and retention rules first.
-
-## Boundaries
-
-This repo is not an agent runtime, prompt manager, eval platform, or full observability SaaS.
-
-It provides an Elastic-native data layer and starter investigation surface. The quality of the dashboard depends on what your agent emits. `doctor` will tell you which fields are missing.
 
 ## Requirements
 
