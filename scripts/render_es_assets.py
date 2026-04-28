@@ -234,6 +234,49 @@ def build_ingest_pipeline(modules: list[str]) -> dict[str, Any]:
             # --- ECS event defaults ---
             {"set": {"field": "event.kind", "value": "event", "override": False}},
             {"set": {"field": "event.category", "value": "process", "override": False}},
+            # --- field normalization: map common non-standard names to canonical fields ---
+            # Different agent frameworks emit fields under varying names. This processor
+            # normalises them so dashboards and alerts work regardless of which SDK the
+            # agent uses. Only fills the canonical field if it is not already set.
+            {
+                "script": {
+                    "lang": "painless",
+                    "source": (
+                        # latency: latency_ms / duration_ms / latency → gen_ai.agent_ext.latency_ms
+                        "def lat = ctx['latency_ms'] ?: ctx['duration_ms'] ?: ctx['latency']; "
+                        "if (lat != null && ctx['gen_ai.agent_ext.latency_ms'] == null) { ctx['gen_ai.agent_ext.latency_ms'] = lat; } "
+                        # tool name: tool_name / tool → gen_ai.tool.name
+                        "def tn = ctx['tool_name'] ?: ctx['tool']; "
+                        "if (tn != null && ctx['gen_ai.tool.name'] == null) { ctx['gen_ai.tool.name'] = tn; } "
+                        # model: model / model_name → gen_ai.request.model
+                        "def mn = ctx['model'] ?: ctx['model_name']; "
+                        "if (mn != null && ctx['gen_ai.request.model'] == null) { ctx['gen_ai.request.model'] = mn; } "
+                        # session: session_id / conversation_id → gen_ai.conversation.id
+                        "def sid = ctx['session_id'] ?: ctx['conversation_id']; "
+                        "if (sid != null && ctx['gen_ai.conversation.id'] == null) { ctx['gen_ai.conversation.id'] = sid; } "
+                        # agent id/name
+                        "def aid = ctx['agent_id']; if (aid != null && ctx['gen_ai.agent.id'] == null) { ctx['gen_ai.agent.id'] = aid; } "
+                        "def anm = ctx['agent_name']; if (anm != null && ctx['gen_ai.agent.name'] == null) { ctx['gen_ai.agent.name'] = anm; } "
+                        # tokens: input_tokens / prompt_tokens → gen_ai.usage.input_tokens
+                        "def it = ctx['input_tokens'] ?: ctx['prompt_tokens']; "
+                        "if (it != null && ctx['gen_ai.usage.input_tokens'] == null) { ctx['gen_ai.usage.input_tokens'] = it; } "
+                        "def ot = ctx['output_tokens'] ?: ctx['completion_tokens']; "
+                        "if (ot != null && ctx['gen_ai.usage.output_tokens'] == null) { ctx['gen_ai.usage.output_tokens'] = ot; } "
+                        # outcome: status / success → event.outcome
+                        "if (ctx.event?.outcome == null) { "
+                        "  def st = ctx['status']; "
+                        "  if (st instanceof String) { "
+                        "    String sl = st.toLowerCase(); "
+                        "    if (sl.equals('success') || sl.equals('ok') || sl.equals('pass')) { ctx.event = ctx.event ?: new HashMap(); ctx.event.outcome = 'success'; } "
+                        "    else if (sl.equals('failure') || sl.equals('fail') || sl.equals('error')) { ctx.event = ctx.event ?: new HashMap(); ctx.event.outcome = 'failure'; } "
+                        "  } "
+                        "  def sc = ctx['success']; "
+                        "  if (sc instanceof Boolean) { ctx.event = ctx.event ?: new HashMap(); ctx.event.outcome = sc ? 'success' : 'failure'; } "
+                        "}"
+                    ),
+                    "ignore_failure": True,
+                }
+            },
             # --- compute event.duration from latency_ms if present ---
             {
                 "script": {
