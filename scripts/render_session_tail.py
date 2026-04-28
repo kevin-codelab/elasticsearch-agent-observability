@@ -348,8 +348,8 @@ class SessionTailer:
         full_pattern = os.path.join(self.session_dir, self.pattern)
         return sorted(glob.glob(full_pattern, recursive=True))
 
-    def _tail_file(self, filepath: str) -> list[tuple[dict[str, Any], int]]:
-        records: list[tuple[dict[str, Any], int]] = []
+    def _tail_file(self, filepath: str) -> list[tuple[dict[str, Any] | None, int]]:
+        records: list[tuple[dict[str, Any] | None, int]] = []
         try:
             stat = os.stat(filepath)
             size = stat.st_size
@@ -381,21 +381,13 @@ class SessionTailer:
                     pos_after = f.tell()
                     stripped = line.strip()
                     if not stripped:
-                        self._state[key] = {{"inode": inode, "offset": pos_after}}
-                        self._save_state()
+                        records.append((None, pos_after))
                         continue
                     try:
                         record = json.loads(stripped)
-                        if isinstance(record, dict):
-                            records.append((record, pos_after))
-                        else:
-                            self._state[key] = {{"inode": inode, "offset": pos_after}}
-                            self._save_state()
+                        records.append((record if isinstance(record, dict) else None, pos_after))
                     except json.JSONDecodeError:
-                        # Only commit malformed lines after skipping them; valid records are
-                        # committed after a successful bridge POST.
-                        self._state[key] = {{"inode": inode, "offset": pos_after}}
-                        self._save_state()
+                        records.append((None, pos_after))
         except OSError:
             pass
         return records
@@ -411,6 +403,10 @@ class SessionTailer:
             except OSError:
                 continue
             for record, pos_after in records:
+                if record is None:
+                    self._state[key] = {{"inode": inode, "offset": pos_after}}
+                    self._save_state()
+                    continue
                 doc = _map_record(record, self.field_map)
                 # Try to infer session_id from filename if not in the record
                 if "gen_ai.conversation.id" not in doc:
