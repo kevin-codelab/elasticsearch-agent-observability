@@ -20,6 +20,15 @@ python scripts/cli.py quickstart \
 
 Agent side — pick the path that fits your runtime:
 
+**Agent writes session JSONL** (OpenClaw, Mastra, custom runtimes with session files):
+```bash
+# Generate the session tail script during quickstart:
+python scripts/render_session_tail.py --output-dir ./generated/session-tail \
+    --session-dir /path/to/agent/sessions --bridge-url http://localhost:14319
+# Start tailing (runs alongside the agent):
+python generated/session-tail/session_tail.py
+```
+
 **Python agents** (CrewAI, LangGraph, AutoGen, LlamaIndex, custom):
 ```python
 pip install traceloop-sdk
@@ -77,17 +86,35 @@ bootstrap_observability.py
 
 ## Data flow
 
+数据采集三层，**注入优先**：
+
 ```
-Agent code
-  │  pip install traceloop-sdk / or use the generated LLM proxy
-  ▼
-OTel SDK (gen_ai.* spans)
-  │
-  ▼
-OTel Collector ──→ ES index template + ingest pipeline ──→ Kibana
-  │                                                          │
-  └── OTLP HTTP bridge (fallback) ─────────────────────────────┘
+Layer 1 — 自动注入（zero-code）
+┌─────────────────────────────────────────────────────┐
+│  LLM Proxy (LiteLLM)                               │  ← 最干净，agent 零改动
+│  Python OTel Bootstrap (monkey-patch OpenAI/Anthropic)
+│  Node.js OTel Bootstrap (--import preload)          │
+│  覆盖：model, tokens, latency, error                │
+└─────────────────────────────────────────────────────┘
+         │
+Layer 2 — 框架注入（low-code）
+┌─────────────────────────────────────────────────────┐
+│  instrument_frameworks.py (AutoGen/CrewAI/LangGraph)│
+│  覆盖：session_id, agent_name, tool_name, turn      │
+└─────────────────────────────────────────────────────┘
+         │
+Layer 3 — 主动上报（agent-specific，仅用于不可注入的数据）
+┌─────────────────────────────────────────────────────┐
+│  traced_decision() / emit_reasoning_span()          │  ← reasoning
+│  evaluate.py run                                    │  ← evaluation
+│  POST /v1/feedback                                  │  ← user feedback
+└─────────────────────────────────────────────────────┘
+         │
+         ▼
+OTel Collector / OTLP HTTP Bridge → ES ingest pipeline → Kibana
 ```
+
+**原则**：如果 agent 在手动 emit latency 或 token，说明应该走 Layer 1。手动上报只用于 reasoning/eval/feedback。
 
 ## CLI
 
@@ -107,6 +134,25 @@ python scripts/cli.py <command> [options]
 | `validate` | Config drift detection |
 | `uninstall` | Remove all managed assets |
 | `scenarios` | "I want to do X → run Y" cheat sheet |
+
+## User Feedback
+
+The OTLP HTTP bridge exposes a dedicated `POST /v1/feedback` endpoint. No OTLP wrapping needed — just plain JSON:
+
+```bash
+curl -X POST http://localhost:14319/v1/feedback \
+  -H "Content-Type: application/json" \
+  -d '{
+    "score": 5,
+    "sentiment": "positive",
+    "comment": "Great answer",
+    "session_id": "sess-001",
+    "trace_id": "abc123",
+    "user_id": "user-42"
+  }'
+```
+
+All fields except `score` are optional. If `sentiment` is omitted, it's auto-derived from `score` (positive > 0, negative < 0, neutral = 0). Data lands in the same ES data stream and powers the Feedback Sentiment / Feedback Score dashboard panels.
 
 ## Schema
 

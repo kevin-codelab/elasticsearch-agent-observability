@@ -202,13 +202,26 @@ def _auto_patch():
             _orig_create = _OrigChatCompletions.create
             def _patched_openai_create(self, *args, **kwargs):
                 model = kwargs.get("model", "unknown")
+                attrs = {
+                    "gen_ai.system": "openai",
+                    "gen_ai.request.model": model,
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.agent_ext.component_type": "llm",
+                }
+                # Try to extract conversation context from metadata / extra_headers
+                metadata = kwargs.get("metadata") or kwargs.get("extra_body", {}).get("metadata") or {}
+                if isinstance(metadata, dict):
+                    if metadata.get("conversation_id"):
+                        attrs["gen_ai.conversation.id"] = str(metadata["conversation_id"])
+                    if metadata.get("session_id"):
+                        attrs["gen_ai.conversation.id"] = str(metadata["session_id"])
+                    if metadata.get("agent_id"):
+                        attrs["gen_ai.agent.id"] = str(metadata["agent_id"])
+                    if metadata.get("turn_id"):
+                        attrs["gen_ai.agent_ext.turn_id"] = str(metadata["turn_id"])
                 with _tracer.start_as_current_span(
                     f"openai.chat.{model}",
-                    attributes={
-                        "gen_ai.system": "openai",
-                        "gen_ai.request.model": model,
-                        "gen_ai.operation.name": "chat",
-                    },
+                    attributes=attrs,
                 ) as span:
                     _t0 = _time.monotonic()
                     try:
@@ -239,13 +252,20 @@ def _auto_patch():
             _orig_msg_create = _OrigMessages.create
             def _patched_anthropic_create(self, *args, **kwargs):
                 model = kwargs.get("model", "unknown")
+                attrs = {
+                    "gen_ai.system": "anthropic",
+                    "gen_ai.request.model": model,
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.agent_ext.component_type": "llm",
+                }
+                metadata = kwargs.get("metadata") or {}
+                if isinstance(metadata, dict):
+                    user_id = metadata.get("user_id")
+                    if user_id:
+                        attrs["gen_ai.feedback.user_id"] = str(user_id)
                 with _tracer.start_as_current_span(
                     f"anthropic.messages.{model}",
-                    attributes={
-                        "gen_ai.system": "anthropic",
-                        "gen_ai.request.model": model,
-                        "gen_ai.operation.name": "chat",
-                    },
+                    attributes=attrs,
                 ) as span:
                     _t0 = _time.monotonic()
                     try:

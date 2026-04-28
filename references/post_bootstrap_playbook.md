@@ -49,13 +49,58 @@ Goal: stop getting generic "HTTP 500" alerts; start seeing "timeout concentrated
 
 Verify: `alert_and_diagnose.py --time-range now-15m` starts citing specific `error_type` / tool / retry counts in the RCA section.
 
-## Level 3 — Optional enrichment
+## Level 3 — Reasoning, evaluation, feedback, and guardrails
 
-Goal: cost panels, safety panels, regression tracking. Only do these when Levels 1 and 2 are solid.
+Goal: fill the reasoning/eval/feedback/guardrail panels. Only do these when Levels 1 and 2 are solid.
 
-- [ ] `gen_ai.agent_ext.cost` — compute per-call USD cost (needs a model-price table; keep it out of the agent's hot path).
-- [ ] `gen_ai.guardrail.*` — if the agent has safety filters.
-- [ ] `gen_ai.evaluation.*` — if the agent has an eval harness.
+These fields **cannot be auto-injected** — they require active reporting from the agent or an external system.
+
+### Reasoning trace (`gen_ai.agent_ext.reasoning.*`)
+
+**When to emit**: at every agent decision point — when the agent chooses an action (tool call, delegate, respond, escalate).
+
+- [ ] `gen_ai.agent_ext.reasoning.action` — what the agent decided to do: `tool_call` / `delegate` / `respond` / `wait` / `escalate`
+- [ ] `gen_ai.agent_ext.reasoning.decision_type` — category: `routing` / `tool_selection` / `delegation` / `termination` / `retry`
+- [ ] `gen_ai.agent_ext.reasoning.rationale` — free-text why (truncated to 500 chars by ingest pipeline)
+- [ ] `gen_ai.agent_ext.reasoning.alternatives` — rejected alternatives (comma-separated)
+- [ ] `gen_ai.agent_ext.reasoning.confidence` — 0-1 self-reported confidence
+
+**How**: use `traced_decision()` decorator or `emit_reasoning_span()` from `instrument_frameworks.py`. If no OTel SDK is available, include these fields as attributes in your OTLP log payload to the bridge.
+
+### Evaluation (`gen_ai.evaluation.*`)
+
+**When to emit**: after an evaluation run scores the agent's responses.
+
+- [ ] `gen_ai.evaluation.outcome` — `pass` / `fail` / `degraded`
+- [ ] `gen_ai.evaluation.dimension` — `quality` / `safety` / `latency`
+- [ ] `gen_ai.evaluation.score` — numeric score from the evaluator
+- [ ] `gen_ai.evaluation.evaluator` — which evaluator produced this (e.g. `llm_judge`, `latency_check`)
+
+**How**: run `evaluate.py run --es-url <url>`. The evaluators automatically write results to ES. For custom evaluators, POST evaluation events to the bridge with these fields.
+
+### User feedback (`gen_ai.feedback.*`)
+
+**When to emit**: after the end user rates or comments on a response.
+
+- [ ] `gen_ai.feedback.score` — numeric (e.g. 1-5, or -1/0/1 for thumbs)
+- [ ] `gen_ai.feedback.sentiment` — `positive` / `negative` / `neutral` (auto-derived from score if omitted)
+- [ ] `gen_ai.feedback.comment` — free-text (truncated to 1000 chars)
+
+**How**: `POST /v1/feedback` on the bridge. Simple JSON, no OTLP wrapping needed:
+```json
+{"score": 5, "sentiment": "positive", "comment": "Good answer", "session_id": "sess-001"}
+```
+
+### Guardrail (`gen_ai.guardrail.*`)
+
+**When to emit**: when a safety filter runs on input or output.
+
+- [ ] `gen_ai.guardrail.action` — `pass` / `block` / `redact`
+- [ ] `gen_ai.guardrail.category` — `content_safety` / `prompt_injection` / `pii` / `custom`
+- [ ] `gen_ai.guardrail.latency_ms` — filter execution time
+
+**How**: include these fields as span attributes if the agent has safety filters, or POST to the bridge.
+
 - [ ] Custom Kibana panels — add them via `--dashboard-extensions` on a follow-up bootstrap; don't hand-edit the generated saved objects.
 
 ## What to do with the `generated/` directory

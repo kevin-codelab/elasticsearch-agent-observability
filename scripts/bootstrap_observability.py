@@ -521,12 +521,35 @@ def _preflight(args: argparse.Namespace, workspace: Path, credentials: tuple[str
             # just hit the unauthenticated /api/status endpoint.
             try:
                 from apply_elasticsearch_assets import kibana_request
-                kibana_request(es_config, kibana_url, "GET", "/api/status")
+                kibana_status = kibana_request(es_config, kibana_url, "GET", "/api/status")
             except SkillError as exc:
                 raise SkillError(
                     f"Preflight: Kibana at `{kibana_url}` is not reachable ({exc}). "
                     "Fix the URL/credentials before retrying — no files have been written."
                 ) from exc
+
+            # Extract Kibana version and warn if too old for Lens panels.
+            try:
+                kbn_version_str = ""
+                if isinstance(kibana_status, dict):
+                    ver = kibana_status.get("version", {})
+                    if isinstance(ver, dict):
+                        kbn_version_str = ver.get("number", "")
+                    elif isinstance(ver, str):
+                        kbn_version_str = ver
+                if kbn_version_str:
+                    parts = kbn_version_str.split(".")
+                    kbn_major = int(parts[0])
+                    kbn_minor = int(parts[1]) if len(parts) > 1 else 0
+                    if kbn_major < 8 or (kbn_major == 8 and kbn_minor < 14):
+                        warnings.append(
+                            f"Kibana {kbn_version_str} detected. Lens panels require Kibana 8.14+. "
+                            "Dashboard panels may render as blank on older versions."
+                        )
+                    else:
+                        print(f"[preflight] Kibana {kbn_version_str} — compatible")
+            except (ValueError, IndexError, TypeError):
+                pass  # Can't parse version — not fatal
 
     # 2) Ingest-mode required inputs.
     if args.ingest_mode == "elastic-agent-fleet":

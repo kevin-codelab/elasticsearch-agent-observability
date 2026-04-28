@@ -39,6 +39,44 @@ After install, the skill is ready. The agent reads this `SKILL.md` and knows wha
 - "帮我看看 agent 为什么慢 / 为什么报错"
 - "run evaluation / check agent quality"
 
+## Data Collection Architecture
+
+数据采集分三层。原则：**能自动注入的绝不手动上报**。
+
+### Layer 1 — 自动注入（Zero-code）
+
+拦截 LLM 调用，自动提取 model / tokens / latency / error。Agent 代码零修改。
+
+| 接入方式 | 适用场景 | 覆盖字段 |
+|---------|---------|---------|
+| **LLM Proxy** (LiteLLM) | 上游项目不可改代码 | `gen_ai.request.model`, `gen_ai.usage.*`, latency, error |
+| **Session Tail** (JSONL file) | 框架已写 session JSONL（OpenClaw 等） | model, tokens, latency, tool, session_id — 从文件自动提取 |
+| **Python OTel Bootstrap** | Python agent，`import` 即生效 | 同上 + OpenAI/Anthropic SDK 自动 patch |
+| **Node.js OTel Bootstrap** | Node/TS agent，`--import` 预加载 | HTTP 出站拦截 + `tracedModelCall` wrapper |
+| **Framework Patch** | AutoGen/CrewAI/LangGraph/OpenAI Agents | `gen_ai.agent.name`, `gen_ai.conversation.id`, `gen_ai.tool.name` |
+
+**选择优先级**：Session Tail（框架已有 JSONL）> LLM Proxy（最通用）> OTel Bootstrap（需 SDK）> Framework Patch（需 OTel tracer）
+
+### Layer 2 — 增强注入（Low-code）
+
+Framework patch 自动关联 session/turn/tool 到 span。需要目标框架在 `instrument_frameworks.py` 支持列表内。
+
+已支持：AutoGen, CrewAI, LangGraph, OpenAI Agents SDK。
+
+新框架通过 `instrument_frameworks.py` 添加 patch，不需要改业务代码。
+
+### Layer 3 — 主动上报（Agent-specific）
+
+以下数据**天然不可能纯注入**，必须由 agent 或外部系统主动写入：
+
+| 数据类型 | 为什么不能注入 | 上报方式 |
+|---------|-------------|---------|
+| **Reasoning trace** | 决策逻辑在 agent 内部，外部拦截器看不到"为什么选这个 tool" | `traced_decision()` 装饰器 / `emit_reasoning_span()` |
+| **Evaluation** | 需要独立评估器（LLM-as-Judge / 规则）对 response 打分 | `evaluate.py run` 写入 `gen_ai.evaluation.*` |
+| **User feedback** | 需要人类输入 | `POST /v1/feedback` 简单 JSON |
+
+**关键区分**：Layer 1/2 的数据应该是真实测量值（latency_ms 是实际计时，token 是 API 返回的）。Layer 3 的数据是语义标注。如果你发现 agent 在自己 emit latency 和 token，说明接入方式选错了——应该走 Layer 1。
+
 ## Operating Path
 
 ### First-time setup
@@ -76,7 +114,7 @@ After install, the skill is ready. The agent reads this `SKILL.md` and knows wha
 | 检测配置漂移 | `validate_state.py` |
 | 卸载 | `uninstall.py --confirm` |
 
-统一入口：`cli.py <command>`（init / quickstart / doctor / alert / cost / eval / replay / status / validate / uninstall / scenarios）
+统一入口：`cli.py <command>`（init / quickstart / doctor / alert / eval / replay / status / validate / uninstall / scenarios）
 
 ## Boundary
 
@@ -90,6 +128,8 @@ After install, the skill is ready. The agent reads this `SKILL.md` and knows wha
 - 深度语义解析任意遥测
 
 ## Key Rules
+
+**注入优先** — Layer 1/2 能覆盖的指标（latency、tokens、error rate）不要让 agent 手动 emit。手动 emit 只用于 Layer 3（reasoning、eval、feedback）。
 
 **Pipeline honesty** — 不要拿 `/healthz` 200 当"管线正常"。用 `doctor.py`，只有 `healthy` 才算。
 
@@ -123,7 +163,7 @@ After install, the skill is ready. The agent reads this `SKILL.md` and knows wha
 
 渲染（通常由 bootstrap 内部调用）：
 
-`render_es_assets.py` / `render_collector_config.py` / `render_otlp_http_bridge.py` / `render_elastic_agent_assets.py` / `render_instrument_snippet.py` / `render_llm_proxy_starter.py`
+`render_es_assets.py` / `render_collector_config.py` / `render_otlp_http_bridge.py` / `render_elastic_agent_assets.py` / `render_instrument_snippet.py` / `render_llm_proxy_starter.py` / `render_session_tail.py`
 
 ## Self-Extension
 

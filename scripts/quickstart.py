@@ -326,10 +326,27 @@ RAG pipeline spans include:
 _GUIDE_OPENCLAW = """\
 # OpenClaw Instrumentation Guide
 
-OpenClaw is a TypeScript-first agent framework. Two paths:
+OpenClaw is a TypeScript-first agent framework. Three paths:
 
-## Path A: Zero-code (LLM Proxy)
-No code changes needed. Generate the proxy bundle and point OpenClaw at it:
+## Path A: Session Tail (recommended)
+OpenClaw writes per-session JSONL files with complete model call data. Tail
+these files and ship to ES — zero code changes, most reliable for non-standard
+LLM providers (e.g. gongfeng).
+```bash
+# Generate the session tail bundle
+python scripts/render_session_tail.py \\
+  --output-dir ./generated/session-tail \\
+  --session-dir /path/to/openclaw/sessions \\
+  --bridge-url http://localhost:14319
+
+# Start tailing (runs alongside OpenClaw)
+python generated/session-tail/session_tail.py
+```
+Edit `field_map.json` to match your JSONL field names if they differ from defaults.
+
+## Path B: LLM Proxy
+If OpenClaw uses a standard OpenAI-compatible endpoint (not gongfeng), put a
+tracing proxy in front:
 ```bash
 agent-obsv init --workspace /path/to/openclaw --output-dir ./generated \\
   --generate-llm-proxy --es-url http://localhost:9200 --apply-es-assets
@@ -340,7 +357,7 @@ Then set in your OpenClaw config:
 OPENAI_API_BASE=http://localhost:4000/v1
 ```
 
-## Path B: Node.js instrumentation
+## Path C: Node.js instrumentation
 ```bash
 agent-obsv init --workspace /path/to/openclaw --output-dir ./generated \\
   --generate-instrument-snippet --instrument-runtime node
@@ -349,7 +366,8 @@ Then preload the bootstrap:
 ```bash
 node --import ./generated/node-instrumentation/agent-otel-bootstrap.mjs dist/index.js
 ```
-Wrap key calls with `tracedToolCall` / `tracedModelCall` for richer semantics.
+Note: this only intercepts standard OpenAI/Anthropic SDK calls. If OpenClaw
+uses a custom LLM provider, Path A (session tail) is more reliable.
 """
 
 _GUIDE_MASTRA = """\

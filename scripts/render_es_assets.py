@@ -564,6 +564,122 @@ def _build_terms_pie_visualization(
     )
 
 
+def _build_lens_metric_visualization(
+    *,
+    object_id: str,
+    data_view_id: str,
+    title: str,
+    description: str,
+    operation_type: str = "count",
+    source_field: str | None = None,
+    label: str = "",
+    query: str = "",
+    extra_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Single big-number KPI metric panel (lnsMetric)."""
+    col: dict[str, Any] = {"operationType": operation_type, "label": label or title}
+    if source_field:
+        col["sourceField"] = source_field
+    if extra_params:
+        col["params"] = extra_params
+    state = _build_lens_state(
+        columns={"col-metric": col},
+        column_order=["col-metric"],
+        visualization={
+            "layerId": DEFAULT_LENS_LAYER_ID,
+            "accessor": "col-metric",
+            "layerType": "data",
+        },
+        query=query,
+    )
+    return build_lens_saved_object(
+        object_id=object_id,
+        title=title,
+        description=description,
+        visualization_type="lnsMetric",
+        state=state,
+        data_view_id=data_view_id,
+    )
+
+
+def _build_lens_table_visualization(
+    *,
+    object_id: str,
+    data_view_id: str,
+    title: str,
+    description: str,
+    source_field: str,
+    metric_label: str = "Count",
+    size: int = 10,
+    query: str = "",
+    sort_direction: str = "desc",
+) -> dict[str, Any]:
+    """Top-N table panel (lnsDatatable)."""
+    state = _build_lens_state(
+        columns={
+            "col-bucket": {
+                "operationType": "terms",
+                "sourceField": source_field,
+                "params": {"size": size, "orderDirection": sort_direction, "orderBy": {"type": "column", "columnId": "col-metric"}},
+            },
+            "col-metric": {"operationType": "count", "label": metric_label},
+        },
+        column_order=["col-bucket", "col-metric"],
+        visualization={
+            "layerId": DEFAULT_LENS_LAYER_ID,
+            "layerType": "data",
+            "columns": [
+                {"columnId": "col-bucket", "isTransposed": False},
+                {"columnId": "col-metric", "isTransposed": False},
+            ],
+        },
+        query=query,
+    )
+    return build_lens_saved_object(
+        object_id=object_id,
+        title=title,
+        description=description,
+        visualization_type="lnsDatatable",
+        state=state,
+        data_view_id=data_view_id,
+    )
+
+
+def _build_lens_horizontal_bar(
+    *,
+    object_id: str,
+    data_view_id: str,
+    title: str,
+    description: str,
+    source_field: str,
+    metric_label: str = "Count",
+    size: int = 10,
+    query: str = "",
+) -> dict[str, Any]:
+    """Horizontal bar chart — terms on Y axis, count on X axis."""
+    state = _build_lens_state(
+        columns={
+            "col-y": {"operationType": "terms", "sourceField": source_field, "params": {"size": size}},
+            "col-x": {"operationType": "count", "label": metric_label},
+        },
+        column_order=["col-y", "col-x"],
+        visualization={
+            "legend": {"isVisible": True, "position": "right"},
+            "preferredSeriesType": "bar_horizontal",
+            "layers": [{"layerId": DEFAULT_LENS_LAYER_ID, "xAccessor": "col-x", "accessors": ["col-x"], "splitAccessor": "col-y"}],
+        },
+        query=query,
+    )
+    return build_lens_saved_object(
+        object_id=object_id,
+        title=title,
+        description=description,
+        visualization_type="lnsXY",
+        state=state,
+        data_view_id=data_view_id,
+    )
+
+
 def _build_lens_event_rate_visualization(*, object_id: str, data_view_id: str) -> dict[str, Any]:
     """Lens XY chart: event count over time, broken down by event.outcome."""
     state = _build_lens_state(
@@ -581,7 +697,7 @@ def _build_lens_event_rate_visualization(*, object_id: str, data_view_id: str) -
     )
     return build_lens_saved_object(
         object_id=object_id,
-        title="Agent event rate",
+        title="Event Rate by Outcome",
         description="Event volume over time, split by success/failure.",
         visualization_type="lnsXY",
         state=state,
@@ -594,8 +710,8 @@ def _build_lens_latency_percentiles(*, object_id: str, data_view_id: str) -> dic
     state = _build_lens_state(
         columns={
             "col-x": {"operationType": "date_histogram", "sourceField": "@timestamp", "params": {"interval": "auto"}},
-            "col-p50": {"operationType": "percentile", "sourceField": "event.duration", "params": {"percentile": 50}, "label": "P50 duration (ns → divide by 1e6 for ms)"},
-            "col-p95": {"operationType": "percentile", "sourceField": "event.duration", "params": {"percentile": 95}, "label": "P95 duration (ns → divide by 1e6 for ms)"},
+            "col-p50": {"operationType": "percentile", "sourceField": "gen_ai.agent_ext.latency_ms", "params": {"percentile": 50}, "label": "P50 latency (ms)", "customLabel": True},
+            "col-p95": {"operationType": "percentile", "sourceField": "gen_ai.agent_ext.latency_ms", "params": {"percentile": 95}, "label": "P95 latency (ms)", "customLabel": True},
         },
         column_order=["col-x", "col-p50", "col-p95"],
         visualization={
@@ -606,8 +722,8 @@ def _build_lens_latency_percentiles(*, object_id: str, data_view_id: str) -> dic
     )
     return build_lens_saved_object(
         object_id=object_id,
-        title="Agent latency over time (P50 / P95)",
-        description="P50 and P95 event.duration over time.",
+        title="Latency Trend (P50 / P95)",
+        description="P50 and P95 latency in milliseconds over time.",
         visualization_type="lnsXY",
         state=state,
         data_view_id=data_view_id,
@@ -631,7 +747,7 @@ def _build_lens_token_usage(*, object_id: str, data_view_id: str) -> dict[str, A
     )
     return build_lens_saved_object(
         object_id=object_id,
-        title="Token usage over time",
+        title="Token Usage over Time",
         description="Input vs output token consumption per time bucket.",
         visualization_type="lnsXY",
         state=state,
@@ -640,27 +756,41 @@ def _build_lens_token_usage(*, object_id: str, data_view_id: str) -> dict[str, A
 
 
 def build_dashboard_saved_object(*, object_id: str, title: str, description: str, panel_refs: list[dict[str, str]]) -> dict[str, Any]:
+    """Build a Kibana dashboard saved object with auto-flow grid layout.
+
+    Kibana uses a 48-column grid. Panels are placed left-to-right; when a panel
+    doesn't fit in the remaining space on the current row, it wraps to the next row.
+    """
     panels = []
     references = []
-    row = 0
+    # Kibana grid is 48 columns wide
+    GRID_WIDTH = 48
+    cur_x = 0
+    cur_y = 0
+    row_height = 0
     for index, ref in enumerate(panel_refs):
         ref_name = f"panel_{index}"
         panel_type = ref.get("type", "search")
         width = int(ref.get("width", "24"))
         height = int(ref.get("height", "15"))
+        # Wrap to next row if panel doesn't fit
+        if cur_x + width > GRID_WIDTH:
+            cur_y += row_height
+            cur_x = 0
+            row_height = 0
         panels.append(
             {
                 "version": "9.0.0",
                 "type": panel_type,
                 "panelIndex": str(index + 1),
-                "gridData": {"x": (index % 2) * 24, "y": row, "w": width, "h": height, "i": str(index + 1)},
+                "gridData": {"x": cur_x, "y": cur_y, "w": width, "h": height, "i": str(index + 1)},
                 "panelRefName": ref_name,
                 "embeddableConfig": {},
             }
         )
         references.append({"type": panel_type, "name": ref_name, "id": ref["id"]})
-        if index % 2 == 1:
-            row += height
+        cur_x += width
+        row_height = max(row_height, height)
     return {
         "type": "dashboard",
         "id": object_id,
@@ -688,27 +818,47 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
     session_search_id = f"{index_prefix}-session-drilldown"
     trace_timeline_id = f"{index_prefix}-trace-timeline"
     dashboard_id = f"{index_prefix}-overview"
+
+    # --- IDs for all lens panels ---
+    # KPI metrics (row 1)
+    kpi_event_count_id = f"{index_prefix}-kpi-event-count"
+    kpi_token_input_id = f"{index_prefix}-kpi-token-input"
+    kpi_token_output_id = f"{index_prefix}-kpi-token-output"
+    kpi_avg_latency_id = f"{index_prefix}-kpi-avg-latency"
+    # Core charts
     lens_event_rate_id = f"{index_prefix}-lens-event-rate"
     lens_latency_id = f"{index_prefix}-lens-latency"
+    lens_token_usage_id = f"{index_prefix}-lens-token-usage"
+    lens_operation_types_id = f"{index_prefix}-lens-operation-types"
+    lens_model_dist_id = f"{index_prefix}-lens-model-distribution"
+    # Session & tools
     lens_top_sessions_id = f"{index_prefix}-lens-top-sessions"
     lens_failed_sessions_id = f"{index_prefix}-lens-failed-sessions"
     lens_top_tools_id = f"{index_prefix}-lens-top-tools"
-    lens_token_usage_id = f"{index_prefix}-lens-token-usage"
     lens_component_type_id = f"{index_prefix}-lens-component-type"
     lens_component_failures_id = f"{index_prefix}-lens-component-failures"
-    # New: Guardrail, Evaluation, Cost panels
+    # Error & retry
+    lens_error_types_id = f"{index_prefix}-lens-error-types"
+    lens_error_trend_id = f"{index_prefix}-lens-error-trend"
+    lens_retry_storm_id = f"{index_prefix}-lens-retry-storm"
+    # Session replay
+    lens_trace_timeline_table_id = f"{index_prefix}-lens-trace-timeline-table"
+    lens_turn_latency_id = f"{index_prefix}-lens-turn-latency"
+    # Guardrail
     lens_guardrail_actions_id = f"{index_prefix}-lens-guardrail-actions"
     lens_guardrail_categories_id = f"{index_prefix}-lens-guardrail-categories"
+    # Evaluation
     lens_eval_outcomes_id = f"{index_prefix}-lens-eval-outcomes"
     lens_eval_dimensions_id = f"{index_prefix}-lens-eval-dimensions"
-    # Reasoning trace panels
+    # Reasoning
     lens_reasoning_actions_id = f"{index_prefix}-lens-reasoning-actions"
     lens_reasoning_decision_types_id = f"{index_prefix}-lens-reasoning-decision-types"
-    # User feedback panels
+    # User feedback
     lens_feedback_sentiment_id = f"{index_prefix}-lens-feedback-sentiment"
     lens_feedback_score_id = f"{index_prefix}-lens-feedback-score"
 
     objects: list[dict[str, Any]] = [
+        # --- Data view ---
         {
             "type": "index-pattern",
             "id": data_view_id,
@@ -718,6 +868,7 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
                 "timeFieldName": "@timestamp",
             },
         },
+        # --- Saved searches ---
         build_search_saved_object(
             object_id=saved_search_id,
             title="Agent observability event stream",
@@ -758,110 +909,203 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
             ],
             query="trace.id:*",
         ),
+        # =====================================================================
+        # KPI metric panels (row 1: 4 small cards)
+        # =====================================================================
+        _build_lens_metric_visualization(
+            object_id=kpi_event_count_id, data_view_id=data_view_id,
+            title="Total Events", description="Total events in selected time range.",
+            operation_type="count", label="Count",
+        ),
+        _build_lens_metric_visualization(
+            object_id=kpi_token_input_id, data_view_id=data_view_id,
+            title="Input Tokens", description="Sum of input tokens consumed.",
+            operation_type="sum", source_field="gen_ai.usage.input_tokens", label="Input",
+        ),
+        _build_lens_metric_visualization(
+            object_id=kpi_token_output_id, data_view_id=data_view_id,
+            title="Output Tokens", description="Sum of output tokens generated.",
+            operation_type="sum", source_field="gen_ai.usage.output_tokens", label="Output",
+        ),
+        _build_lens_metric_visualization(
+            object_id=kpi_avg_latency_id, data_view_id=data_view_id,
+            title="Avg Latency (ms)", description="Average latency in milliseconds.",
+            operation_type="average", source_field="gen_ai.agent_ext.latency_ms", label="Avg Latency (ms)",
+        ),
+        # =====================================================================
+        # Core time-series charts (row 2-3)
+        # =====================================================================
         _build_lens_event_rate_visualization(object_id=lens_event_rate_id, data_view_id=data_view_id),
         _build_lens_latency_percentiles(object_id=lens_latency_id, data_view_id=data_view_id),
-        _build_terms_pie_visualization(
-            object_id=lens_top_sessions_id, data_view_id=data_view_id,
-            title="Top sessions by event volume",
-            description="Most active gen_ai.conversation.id values in the selected time window.",
-            source_field="gen_ai.conversation.id", metric_label="Events",
-        ),
-        _build_terms_pie_visualization(
-            object_id=lens_failed_sessions_id, data_view_id=data_view_id,
-            title="Failed sessions",
-            description="Failure-heavy sessions for fast conversation-level drilldown.",
-            source_field="gen_ai.conversation.id", metric_label="Failures",
-            query="event.outcome: failure and gen_ai.conversation.id:*",
-        ),
-        _build_terms_pie_visualization(
-            object_id=lens_top_tools_id, data_view_id=data_view_id,
-            title="Top tools by call count",
-            description="Pie chart of most-called agent tools.",
-            source_field="gen_ai.tool.name", metric_label="Calls",
-        ),
         _build_lens_token_usage(object_id=lens_token_usage_id, data_view_id=data_view_id),
+        # Operation types — horizontal bar
+        _build_lens_horizontal_bar(
+            object_id=lens_operation_types_id, data_view_id=data_view_id,
+            title="Operations",
+            description="Event count by operation type.",
+            source_field="gen_ai.operation.name", metric_label="Count",
+        ),
+        # Model distribution — donut
         _build_terms_pie_visualization(
-            object_id=lens_component_type_id,
-            data_view_id=data_view_id,
-            title="Events by component type",
-            description="Breakdown by gen_ai.agent_ext.component_type (runtime / tool / llm / mcp / memory / knowledge / guardrail).",
-            source_field="gen_ai.agent_ext.component_type",
-            metric_label="Events",
+            object_id=lens_model_dist_id, data_view_id=data_view_id,
+            title="Model Distribution",
+            description="Event count by model.",
+            source_field="gen_ai.request.model", metric_label="Events",
+        ),
+        # =====================================================================
+        # Session & tool panels (tables + pie)
+        # =====================================================================
+        _build_lens_table_visualization(
+            object_id=lens_top_sessions_id, data_view_id=data_view_id,
+            title="Top Sessions by Volume",
+            description="Most active sessions ranked by event count.",
+            source_field="gen_ai.conversation.id", metric_label="Count",
+        ),
+        _build_lens_table_visualization(
+            object_id=lens_failed_sessions_id, data_view_id=data_view_id,
+            title="Failed Sessions",
+            description="Sessions with most failures for fast drilldown.",
+            source_field="gen_ai.conversation.id", metric_label="Count",
+            query="event.outcome:failure and gen_ai.conversation.id:*",
+        ),
+        _build_lens_horizontal_bar(
+            object_id=lens_top_tools_id, data_view_id=data_view_id,
+            title="Top Tools",
+            description="Most-called agent tools.",
+            source_field="gen_ai.tool.name", metric_label="Count",
         ),
         _build_terms_pie_visualization(
+            object_id=lens_component_type_id, data_view_id=data_view_id,
+            title="Component Types",
+            description="Event breakdown by component type (runtime / tool / llm / mcp).",
+            source_field="gen_ai.agent_ext.component_type", metric_label="Events",
+        ),
+        _build_lens_horizontal_bar(
             object_id=lens_component_failures_id, data_view_id=data_view_id,
-            title="Failure hotspots by component",
-            description="Which component types are producing the most failed events.",
-            source_field="gen_ai.agent_ext.component_type", metric_label="Failures",
-            query="event.outcome: failure and gen_ai.agent_ext.component_type:*",
+            title="Failures by Component",
+            description="Which component types produce the most failures.",
+            source_field="gen_ai.agent_ext.component_type", metric_label="Count",
+            query="event.outcome:failure and gen_ai.agent_ext.component_type:*",
         ),
-        # --- Guardrail panels ---
+        # =====================================================================
+        # Error & Retry panels
+        # =====================================================================
         _build_terms_pie_visualization(
-            object_id=lens_guardrail_actions_id, data_view_id=data_view_id,
-            title="Guardrail actions",
-            description="Distribution of guardrail decisions: pass / block / redact.",
-            source_field="gen_ai.guardrail.action", metric_label="Events",
-            query="gen_ai.guardrail.action:*",
+            object_id=lens_error_types_id, data_view_id=data_view_id,
+            title="Error Types",
+            description="Breakdown of error types.",
+            source_field="error.type", metric_label="Errors",
+            query="error.type:*",
         ),
-        _build_terms_pie_visualization(
-            object_id=lens_guardrail_categories_id, data_view_id=data_view_id,
-            title="Guardrail categories",
-            description="Which safety categories are firing: content_safety, prompt_injection, pii, custom.",
-            source_field="gen_ai.guardrail.category", metric_label="Events",
-            query="gen_ai.guardrail.category:*",
-        ),
-        # --- Evaluation panels ---
-        _build_terms_pie_visualization(
-            object_id=lens_eval_outcomes_id, data_view_id=data_view_id,
-            title="Evaluation outcomes",
-            description="Pass / fail / degraded distribution from evaluation runs.",
-            source_field="gen_ai.evaluation.outcome", metric_label="Evaluations",
-            query="gen_ai.evaluation.outcome:*",
-        ),
-        _build_terms_pie_visualization(
-            object_id=lens_eval_dimensions_id, data_view_id=data_view_id,
-            title="Evaluation dimensions",
-            description="Breakdown by evaluation dimension: quality, safety, latency, cost.",
-            source_field="gen_ai.evaluation.dimension", metric_label="Evaluations",
-            query="gen_ai.evaluation.dimension:*",
-        ),
-        # --- Cost panels ---
     ]
 
-    # Reasoning trace panels
-    objects.append(
-        _build_terms_pie_visualization(
-            object_id=lens_reasoning_actions_id, data_view_id=data_view_id,
-            title="Reasoning actions",
-            description="Distribution of agent decision actions: tool_call / delegate / respond / wait / escalate.",
-            source_field="gen_ai.agent_ext.reasoning.action", metric_label="Decisions",
-            query="gen_ai.agent_ext.reasoning.action:*",
-        ),
+    # Error trend over time
+    error_trend_state = _build_lens_state(
+        columns={
+            "col-x": {"operationType": "date_histogram", "sourceField": "@timestamp", "params": {"interval": "auto"}},
+            "col-y": {"operationType": "count", "label": "Errors"},
+            "col-break": {"operationType": "terms", "sourceField": "error.type", "params": {"size": 5}},
+        },
+        column_order=["col-x", "col-break", "col-y"],
+        visualization={
+            "legend": {"isVisible": True, "position": "right"},
+            "preferredSeriesType": "bar_stacked",
+            "layers": [{"layerId": DEFAULT_LENS_LAYER_ID, "xAccessor": "col-x", "accessors": ["col-y"], "splitAccessor": "col-break"}],
+        },
+        query="error.type:*",
     )
-    objects.append(
-        _build_terms_pie_visualization(
-            object_id=lens_reasoning_decision_types_id, data_view_id=data_view_id,
-            title="Decision types",
-            description="Breakdown of agent reasoning decision types: routing, tool_selection, delegation, termination, retry.",
-            source_field="gen_ai.agent_ext.reasoning.decision_type", metric_label="Decisions",
-            query="gen_ai.agent_ext.reasoning.decision_type:*",
-        ),
-    )
+    objects.append(build_lens_saved_object(
+        object_id=lens_error_trend_id, title="Error Trend",
+        description="Error volume over time by type.",
+        visualization_type="lnsXY", state=error_trend_state, data_view_id=data_view_id,
+    ))
 
+    # Retry storm — table of sessions with high retry counts
+    objects.append(_build_lens_table_visualization(
+        object_id=lens_retry_storm_id, data_view_id=data_view_id,
+        title="Retry Storm",
+        description="Sessions with excessive retries.",
+        source_field="gen_ai.conversation.id", metric_label="Total Retries",
+        query="gen_ai.agent_ext.retry_count > 0",
+    ))
+
+    # =====================================================================
+    # Session replay helpers
+    # =====================================================================
+    objects.append(_build_lens_table_visualization(
+        object_id=lens_trace_timeline_table_id, data_view_id=data_view_id,
+        title="Trace Steps",
+        description="Events per trace for step-by-step replay.",
+        source_field="trace.id", metric_label="Count",
+    ))
+    objects.append(_build_lens_horizontal_bar(
+        object_id=lens_turn_latency_id, data_view_id=data_view_id,
+        title="Turn Latency",
+        description="Latency distribution across turns.",
+        source_field="gen_ai.agent_ext.turn_id", metric_label="Count",
+    ))
+
+    # =====================================================================
+    # Guardrail panels
+    # =====================================================================
+    objects.append(_build_terms_pie_visualization(
+        object_id=lens_guardrail_actions_id, data_view_id=data_view_id,
+        title="Guardrail Actions", description="Distribution of guardrail decisions: pass / block / redact.",
+        source_field="gen_ai.guardrail.action", metric_label="Events",
+        query="gen_ai.guardrail.action:*",
+    ))
+    objects.append(_build_terms_pie_visualization(
+        object_id=lens_guardrail_categories_id, data_view_id=data_view_id,
+        title="Guardrail Categories", description="Safety categories: content_safety, prompt_injection, pii, custom.",
+        source_field="gen_ai.guardrail.category", metric_label="Events",
+        query="gen_ai.guardrail.category:*",
+    ))
+
+    # =====================================================================
+    # Evaluation panels
+    # =====================================================================
+    objects.append(_build_terms_pie_visualization(
+        object_id=lens_eval_outcomes_id, data_view_id=data_view_id,
+        title="Evaluation Outcomes", description="Pass / fail / degraded distribution.",
+        source_field="gen_ai.evaluation.outcome", metric_label="Evaluations",
+        query="gen_ai.evaluation.outcome:*",
+    ))
+    objects.append(_build_terms_pie_visualization(
+        object_id=lens_eval_dimensions_id, data_view_id=data_view_id,
+        title="Evaluation Dimensions", description="Breakdown by dimension: quality, safety, latency.",
+        source_field="gen_ai.evaluation.dimension", metric_label="Evaluations",
+        query="gen_ai.evaluation.dimension:*",
+    ))
+
+    # =====================================================================
+    # Reasoning trace panels
+    # =====================================================================
+    objects.append(_build_terms_pie_visualization(
+        object_id=lens_reasoning_actions_id, data_view_id=data_view_id,
+        title="Reasoning Actions", description="Agent decision actions: tool_call / delegate / respond / wait / escalate.",
+        source_field="gen_ai.agent_ext.reasoning.action", metric_label="Decisions",
+        query="gen_ai.agent_ext.reasoning.action:*",
+    ))
+    objects.append(_build_terms_pie_visualization(
+        object_id=lens_reasoning_decision_types_id, data_view_id=data_view_id,
+        title="Reasoning Decision Types", description="Decision types: routing, tool_selection, delegation, termination, retry.",
+        source_field="gen_ai.agent_ext.reasoning.decision_type", metric_label="Decisions",
+        query="gen_ai.agent_ext.reasoning.decision_type:*",
+    ))
+
+    # =====================================================================
     # User feedback panels
-    objects.append(
-        _build_terms_pie_visualization(
-            object_id=lens_feedback_sentiment_id, data_view_id=data_view_id,
-            title="User feedback sentiment",
-            description="Distribution of user feedback: positive / negative / neutral.",
-            source_field="gen_ai.feedback.sentiment", metric_label="Feedback",
-            query="gen_ai.feedback.sentiment:*",
-        ),
-    )
+    # =====================================================================
+    objects.append(_build_terms_pie_visualization(
+        object_id=lens_feedback_sentiment_id, data_view_id=data_view_id,
+        title="Feedback Sentiment", description="Positive / negative / neutral distribution.",
+        source_field="gen_ai.feedback.sentiment", metric_label="Feedback",
+        query="gen_ai.feedback.sentiment:*",
+    ))
     feedback_score_state = _build_lens_state(
         columns={
             "col-x": {"operationType": "date_histogram", "sourceField": "@timestamp", "params": {"interval": "auto"}},
-            "col-avg": {"operationType": "average", "sourceField": "gen_ai.feedback.score", "label": "Avg feedback score"},
+            "col-avg": {"operationType": "average", "sourceField": "gen_ai.feedback.score", "label": "Avg Feedback Score", "customLabel": True},
         },
         column_order=["col-x", "col-avg"],
         visualization={
@@ -870,38 +1114,64 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
             "layers": [{"layerId": DEFAULT_LENS_LAYER_ID, "xAccessor": "col-x", "accessors": ["col-avg"]}],
         },
     )
-    objects.append(
-        build_lens_saved_object(
-            object_id=lens_feedback_score_id,
-            title="Feedback score over time",
-            description="Average user feedback score over time. Track quality trends.",
-            visualization_type="lnsXY",
-            state=feedback_score_state,
-            data_view_id=data_view_id,
-        ),
-    )
+    objects.append(build_lens_saved_object(
+        object_id=lens_feedback_score_id, title="Feedback Score over Time",
+        description="Average user feedback score over time.",
+        visualization_type="lnsXY", state=feedback_score_state, data_view_id=data_view_id,
+    ))
 
+    # =====================================================================
+    # Dashboard layout — panels ordered by importance
+    # =====================================================================
+    # Row 1: KPI cards (4 × 12w × 6h)
+    # Row 2-3: Core charts (event rate, latency, token, operation types, model dist)
+    # Row 4-5: Session & tools
+    # Row 6: Error & retry
+    # Row 7: Session replay helpers
+    # Row 8: Guardrail/Eval/Reasoning/Feedback (advanced, often empty)
+    # Row 9: Discover saved searches
     dashboard_panels = [
+        # --- KPI row (4 cards, each 12 wide, 6 tall) ---
+        {"id": kpi_event_count_id, "type": "lens", "width": "12", "height": "6"},
+        {"id": kpi_token_input_id, "type": "lens", "width": "12", "height": "6"},
+        {"id": kpi_token_output_id, "type": "lens", "width": "12", "height": "6"},
+        {"id": kpi_avg_latency_id, "type": "lens", "width": "12", "height": "6"},
+        # --- Core charts ---
         {"id": lens_event_rate_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_latency_id, "type": "lens", "width": "24", "height": "12"},
-        {"id": lens_top_sessions_id, "type": "lens", "width": "24", "height": "12"},
-        {"id": lens_failed_sessions_id, "type": "lens", "width": "24", "height": "12"},
-        {"id": lens_component_type_id, "type": "lens", "width": "24", "height": "12"},
-        {"id": lens_component_failures_id, "type": "lens", "width": "24", "height": "12"},
-        {"id": lens_top_tools_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_token_usage_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_operation_types_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_model_dist_id, "type": "lens", "width": "16", "height": "12"},
+        # --- Session & tools ---
+        {"id": lens_top_sessions_id, "type": "lens", "width": "24", "height": "10"},
+        {"id": lens_failed_sessions_id, "type": "lens", "width": "24", "height": "10"},
+        {"id": lens_top_tools_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_component_type_id, "type": "lens", "width": "16", "height": "12"},
+        {"id": lens_component_failures_id, "type": "lens", "width": "16", "height": "12"},
+        # --- Error & retry ---
+        {"id": lens_error_types_id, "type": "lens", "width": "16", "height": "12"},
+        {"id": lens_error_trend_id, "type": "lens", "width": "24", "height": "12"},
+        {"id": lens_retry_storm_id, "type": "lens", "width": "24", "height": "10"},
+        # --- Session replay ---
+        {"id": lens_trace_timeline_table_id, "type": "lens", "width": "24", "height": "10"},
+        {"id": lens_turn_latency_id, "type": "lens", "width": "16", "height": "12"},
+        # --- Guardrail ---
         {"id": lens_guardrail_actions_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_guardrail_categories_id, "type": "lens", "width": "24", "height": "12"},
+        # --- Evaluation ---
         {"id": lens_eval_outcomes_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_eval_dimensions_id, "type": "lens", "width": "24", "height": "12"},
+        # --- Reasoning ---
         {"id": lens_reasoning_actions_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_reasoning_decision_types_id, "type": "lens", "width": "24", "height": "12"},
+        # --- Feedback ---
         {"id": lens_feedback_sentiment_id, "type": "lens", "width": "24", "height": "12"},
         {"id": lens_feedback_score_id, "type": "lens", "width": "24", "height": "12"},
-        {"id": session_search_id, "type": "search", "width": "24", "height": "15"},
-        {"id": trace_timeline_id, "type": "search", "width": "24", "height": "15"},
-        {"id": saved_search_id, "type": "search", "width": "24", "height": "15"},
-        {"id": failure_search_id, "type": "search", "width": "24", "height": "15"},
+        # --- Discover tables (full width, one per row) ---
+        {"id": saved_search_id, "type": "search", "width": "48", "height": "15"},
+        {"id": failure_search_id, "type": "search", "width": "48", "height": "15"},
+        {"id": session_search_id, "type": "search", "width": "48", "height": "15"},
+        {"id": trace_timeline_id, "type": "search", "width": "48", "height": "15"},
     ]
 
     extra_lens_ids: list[str] = []
@@ -970,14 +1240,25 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
             "session_search_id": session_search_id,
             "dashboard_id": dashboard_id,
             "lens_ids": [
+                kpi_event_count_id,
+                kpi_token_input_id,
+                kpi_token_output_id,
+                kpi_avg_latency_id,
                 lens_event_rate_id,
                 lens_latency_id,
+                lens_token_usage_id,
+                lens_operation_types_id,
+                lens_model_dist_id,
                 lens_top_sessions_id,
                 lens_failed_sessions_id,
                 lens_top_tools_id,
-                lens_token_usage_id,
                 lens_component_type_id,
                 lens_component_failures_id,
+                lens_error_types_id,
+                lens_error_trend_id,
+                lens_retry_storm_id,
+                lens_trace_timeline_table_id,
+                lens_turn_latency_id,
                 lens_guardrail_actions_id,
                 lens_guardrail_categories_id,
                 lens_eval_outcomes_id,
@@ -1017,7 +1298,6 @@ def build_report_config(index_prefix: str, discovery: dict[str, Any], *, extensi
             "retry_total",
             "token_input_total",
             "token_output_total",
-            "cost_total",
             "top_sessions",
             "failed_sessions",
             "slow_turns",
