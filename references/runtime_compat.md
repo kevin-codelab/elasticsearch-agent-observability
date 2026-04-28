@@ -24,8 +24,8 @@ Adapt trigger and installation entrypoints, but keep the discovery and rendering
 
 ## Version compatibility
 
-- **Elasticsearch**: 9.0+ (Basic license is enough)
-- **Kibana**: 9.0+
+- **Elasticsearch**: 8.x / 9.x (Basic license is enough)
+- **Kibana**: 8.14+ / 9.x (Lens `formBased` datasource requires 8.14+; earlier 8.x will show blank panels)
 - **otelcol-contrib**: 0.87.0+ (required for `spanmetrics` connector and `mapping.allowed_modes` in the Elasticsearch exporter)
 - **Python**: 3.10+
 - **OpenTelemetry SDK (Python)**: 1.24+ (for log export support)

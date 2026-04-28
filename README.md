@@ -128,7 +128,7 @@ Full dictionary: [`references/telemetry_schema.md`](references/telemetry_schema.
 ## Requirements
 
 - Python 3.10+ (stdlib only, zero third-party deps)
-- Elasticsearch 8.x / 9.x + Kibana (Basic license)
+- Elasticsearch 8.x / 9.x + Kibana 8.14+ / 9.x (Basic license; Lens panels require Kibana 8.14+)
 - `otelcol-contrib` 0.87.0+ for the Collector path
 - Any OTel GenAI instrumentation SDK (OpenLLMetry recommended)
 
