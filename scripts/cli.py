@@ -108,7 +108,7 @@ def main() -> int:
 
     if command not in COMMANDS:
         print(f"Unknown command: {command}", file=sys.stderr)
-        print(f"Run `agent-obsv --help` for available commands.", file=sys.stderr)
+        print("Run `agent-obsv --help` for available commands.", file=sys.stderr)
         return 1
 
     module_name, _ = COMMANDS[command]

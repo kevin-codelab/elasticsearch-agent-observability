@@ -129,7 +129,6 @@ class LogSeverityFilterTests(unittest.TestCase):
         # filter/log_severity must be in logs pipeline processors, not in traces or metrics
         self.assertIn("filter/log_severity, batch]\n      exporters: [elasticsearch/events]", rendered)
         # Must NOT be in traces pipeline
-        traces_line = [l for l in rendered.split("\n") if "traces:" in l and "receivers" not in l]
         for line in rendered.split("\n"):
             if "exporters: [elasticsearch/events, spanmetrics]" in line:
                 # This is the traces pipeline exporter line — check the processor line above

@@ -9,8 +9,6 @@ Reports drift as structured JSON or human-readable text.
 from __future__ import annotations
 
 import argparse
-import json
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +16,6 @@ from common import (
     ESConfig,
     SkillError,
     build_component_template_name,
-    build_data_stream_name,
     es_request,
     print_error,
     read_json,

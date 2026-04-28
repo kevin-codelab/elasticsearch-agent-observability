@@ -21,10 +21,7 @@ from common import (
     SkillError,
     ensure_dir,
     print_error,
-    print_info,
-    validate_credential_pair,
     validate_workspace_dir,
-    write_json,
     write_text,
 )
 
@@ -593,7 +590,7 @@ def main() -> int:
             if framework in FRAMEWORK_SIGNATURES:
                 print(f"  2. Follow the {FRAMEWORK_SIGNATURES[framework]['label']}-specific steps")
             print(f"  3. Run `agent-obsv doctor --es-url {args.es_url}` to verify the pipeline")
-            print(f"  4. Open Kibana to see the dashboard")
+            print("  4. Open Kibana to see the dashboard")
             print("=" * 60)
 
         return exit_code

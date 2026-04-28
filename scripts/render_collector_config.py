@@ -9,7 +9,6 @@ from pathlib import Path
 
 from common import (
     SkillError,
-    build_data_stream_name,
     build_events_alias,
     print_error,
     read_json,

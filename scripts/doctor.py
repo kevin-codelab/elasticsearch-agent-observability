@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import urllib.error
 import urllib.request
 from typing import Any
@@ -53,8 +52,6 @@ from typing import Any
 from common import (
     ESConfig,
     SkillError,
-    BRIDGE_OTLP_PORTS,
-    COLLECTOR_OTLP_PORTS,
     build_data_stream_name,
     build_ssl_context,
     emit_skill_audit,
@@ -65,20 +62,13 @@ from common import (
     validate_credential_pair,
     validate_index_prefix,
 )
-from field_manifest import FIELD_MANIFEST, TIER2_FIELDS, TIER3_FIELDS
+from field_manifest import FIELD_MANIFEST
 from verify_pipeline import _local_preflight, run_verify as verify_run
 
 
 DEFAULT_FRESHNESS_MINUTES = 10
 DEFAULT_HEALTHZ_URL = "http://127.0.0.1:14319/healthz"
 DEFAULT_OTLP_HTTP_ENDPOINT = "http://127.0.0.1:14319"
-
-# Path-port tuples resolved per-run against runtime-config.json (see
-# ``_resolved_ports``). The module-level aliases kept for back-compat in
-# tests default to the hard-coded constants.
-BRIDGE_PATH_PORTS = BRIDGE_OTLP_PORTS
-COLLECTOR_PATH_PORTS = COLLECTOR_OTLP_PORTS
-
 
 def _resolved_ports() -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Load runtime-config once per call and return (collector, bridge) ports."""
@@ -395,11 +385,6 @@ def _probe_canary(args: argparse.Namespace) -> dict[str, Any]:
 # Instrumentation coverage probe
 # ---------------------------------------------------------------------------
 
-# Back-compat aliases for tests/importers. The source lives in field_manifest.py.
-_TIER2_FIELDS = TIER2_FIELDS
-_TIER3_FIELDS = TIER3_FIELDS
-
-
 def _probe_instrumentation_coverage(
     config: "ESConfig", *, index_prefix: str, freshness_minutes: int
 ) -> dict[str, Any]:
@@ -483,7 +468,7 @@ def _probe_instrumentation_coverage(
         )
     else:
         status = "pass"
-        detail = f"Instrumentation coverage 100%. All Tier 2 and Tier 3 fields have data."
+        detail = "Instrumentation coverage 100%. All Tier 2 and Tier 3 fields have data."
 
     return {
         "status": status,
@@ -718,7 +703,7 @@ def _collect_fix_commands(result: dict[str, Any]) -> list[str]:
         cmds.append(f"curl -s {es_url_hint}   # verify ES is reachable")
 
     if not cmds and result["verdict"] != "healthy":
-        cmds.append(f"python scripts/doctor.py --es-url <url> --output-format json   # get structured output for debugging")
+        cmds.append("python scripts/doctor.py --es-url <url> --output-format json   # get structured output for debugging")
 
     return cmds
 

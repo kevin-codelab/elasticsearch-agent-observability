@@ -13,7 +13,6 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import bootstrap_observability  # noqa: E402
 import doctor  # noqa: E402
-from common import SkillError  # noqa: E402
 
 
 def _args(**overrides) -> argparse.Namespace:
