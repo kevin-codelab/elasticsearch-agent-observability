@@ -120,6 +120,36 @@ class EvaluateTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "pass")
         self.assertIn("Skipped", result["detail"])
 
+    def test_llm_judge_endpoint_normalization(self) -> None:
+        from evaluate import _build_llm_judge_url
+        self.assertEqual(_build_llm_judge_url("http://localhost:4000"), "http://localhost:4000/v1/chat/completions")
+        self.assertEqual(_build_llm_judge_url("http://localhost:4000/v1"), "http://localhost:4000/v1/chat/completions")
+        self.assertEqual(
+            _build_llm_judge_url("http://localhost:4000/api/v1/other"),
+            "http://localhost:4000/api/v1/other/v1/chat/completions",
+        )
+        self.assertEqual(
+            _build_llm_judge_url("http://localhost:4000/v1/chat/completions"),
+            "http://localhost:4000/v1/chat/completions",
+        )
+
+    def test_eval_results_write_uses_explicit_create_id(self) -> None:
+        from common import ESConfig
+        from evaluate import _write_eval_results
+        calls = []
+
+        def fake_es(config, method, path, payload=None):
+            calls.append((method, path, payload))
+            return {"result": "created"}
+
+        report = {
+            "evaluated_at": "2026-04-28T00:00:00+00:00",
+            "results": [{"run_id": "eval-abc", "evaluator": "latency_regression", "outcome": "pass", "score": 1.0}],
+        }
+        with patch("evaluate.es_request", side_effect=fake_es):
+            _write_eval_results(ESConfig(es_url="http://x"), "agent-obsv", report)
+        self.assertRegex(calls[0][1], r"/agent-obsv-events/_create/eval-abc-latency_regression-[0-9a-f]+$")
+
     def test_render_text(self) -> None:
         from evaluate import render_text
         report = {

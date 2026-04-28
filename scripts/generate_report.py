@@ -44,7 +44,7 @@ def search_payload(time_range: str, time_field: str = "@timestamp") -> dict[str,
         "query": {
             "bool": {
                 "filter": [{"range": {time_field: {"gte": time_range}}}],
-                "must_not": [{"term": {"event.dataset": "internal.sanity_check"}}],
+                "must_not": [{"prefix": {"event.dataset": "internal."}}],
             }
         },
         "aggs": {

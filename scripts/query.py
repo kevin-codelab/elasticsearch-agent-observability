@@ -32,7 +32,7 @@ from common import (
 
 DEFAULT_SIZE = 50
 DEFAULT_TIME_RANGE = "now-24h"
-INTERNAL_DATASET_FILTER = {"term": {"event.dataset": "internal.sanity_check"}}
+INTERNAL_DATASET_FILTER = {"prefix": {"event.dataset": "internal."}}
 
 # ---------------------------------------------------------------------------
 # Query builders — each returns a (path, payload) tuple

@@ -11,6 +11,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -370,7 +371,8 @@ def emit_skill_audit(
         for key, value in extra.items():
             doc.setdefault(key, value)
     try:
-        es_request(config, "POST", f"/{ds_name}/_create", doc)
+        doc_id = f"skill-audit-{uuid.uuid4().hex}"
+        es_request(config, "POST", f"/{ds_name}/_create/{doc_id}", doc)
         return True
     except SkillError as exc:
         print(f"⚠️  skill self-audit write failed ({tool_name}): {exc}", file=sys.stderr)

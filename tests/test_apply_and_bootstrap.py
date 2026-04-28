@@ -49,6 +49,26 @@ class ApplyAndBootstrapTests(unittest.TestCase):
         self.assertTrue(any(path == "/_index_template/agent-obsv-events-template" for _, path, _ in calls))
         self.assertTrue(any("_data_stream" in path for _, path, _ in calls))
 
+    def test_sanity_check_writes_data_stream_create_with_explicit_id(self) -> None:
+        calls = []
+
+        def fake_es_request(config, method, path, payload=None):
+            calls.append((method, path, payload))
+            if "/_create/" in path:
+                return {"_id": path.rsplit("/", 1)[-1]}
+            if path.endswith("/_search"):
+                return {"hits": {"total": {"value": 1}, "hits": [{"_source": {"observer": {"product": "elasticsearch-agent-observability"}}}]}}
+            return {"acknowledged": True}
+
+        with mock.patch.object(apply_elasticsearch_assets, "es_request", side_effect=fake_es_request):
+            result = apply_elasticsearch_assets.sanity_check(
+                ESConfig(es_url="http://localhost:9200"),
+                index_prefix="agent-obsv",
+            )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertTrue(any(path.startswith("/agent-obsv-events/_create/sanity-") for _, path, _ in calls))
+
     def test_apply_assets_can_push_kibana_saved_objects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             assets_dir = Path(tmp_dir)
@@ -263,6 +283,31 @@ class ApplyAndBootstrapTests(unittest.TestCase):
         self.assertIn('BRIDGE_PORT = 14319', script)
         self.assertIn('OTLP protobuf payloads require', script)
         compile(script, "rendered-bridge", "exec")
+
+    def test_rendered_bridge_redacts_sensitive_attribute_aliases(self) -> None:
+        script = render_otlp_http_bridge.render_bridge_script(
+            es_url="http://localhost:9200",
+            index_prefix="agent-obsv",
+            bind_host="127.0.0.1",
+            bind_port=14319,
+            verify_tls=True,
+        )
+        namespace: dict = {}
+        exec(script, namespace)
+        document: dict = {}
+        namespace["_apply_attributes"](
+            document,
+            {
+                "tool_args": "secret args",
+                "gen_ai.tool.call.result": "secret result",
+                "safe": {"tool_result": "nested secret", "ok": 1},
+            },
+        )
+        self.assertNotIn("tool_args", document)
+        self.assertNotIn("gen_ai.tool.call.result", document)
+        self.assertEqual(document["safe"], {"ok": 1})
+        message = namespace["_coerce_message"]({"gen_ai": {"tool": {"call": {"arguments": "secret"}}}})
+        self.assertEqual(message, "[redacted sensitive GenAI payload]")
 
     def test_summary_includes_sanity_check_scope_note_after_apply(self) -> None:
         summary = bootstrap_observability.build_summary(

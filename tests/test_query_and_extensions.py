@@ -64,7 +64,7 @@ class QueryTemplateTests(unittest.TestCase):
         for _, payload in queries:
             must_not = payload["query"]["bool"].get("must_not", [])
             self.assertTrue(
-                any(c.get("term", {}).get("event.dataset") == "internal.sanity_check" for c in must_not),
+                any(c.get("prefix", {}).get("event.dataset") == "internal." for c in must_not),
                 f"query must exclude internal datasets: {payload}",
             )
 

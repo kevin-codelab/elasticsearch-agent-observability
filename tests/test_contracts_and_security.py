@@ -337,7 +337,7 @@ class ContractsAndSecurityTests(unittest.TestCase):
         self.assertIn("@timestamp", range_clause)
         self.assertIn("gen_ai.tool.name", str(payload["aggs"]))
         must_not = payload["query"]["bool"]["must_not"]
-        self.assertTrue(any(clause.get("term", {}).get("event.dataset") == "internal.sanity_check" for clause in must_not))
+        self.assertTrue(any(clause.get("prefix", {}).get("event.dataset") == "internal." for clause in must_not))
 
     def test_search_payload_uses_custom_time_field(self) -> None:
         payload = generate_report.search_payload("now-24h", time_field="event.ingested")

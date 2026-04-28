@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -50,6 +52,7 @@ DEFAULT_TIME_RANGE = "now-15m"
 DEFAULT_ERROR_THRESHOLD = 10
 DEFAULT_P95_LATENCY_THRESHOLD_MS = 5000
 DEFAULT_TOKEN_THRESHOLD_MULTIPLIER = 3.0
+NO_BASELINE_TOKEN_THRESHOLD = 50_000
 
 # Aggregation queries always carry a server-side timeout so a slow ES query
 # cannot wedge an `alert_and_diagnose` run in a cron slot.
@@ -322,9 +325,17 @@ def _analyze_token_anomaly(current: dict[str, Any], baseline: dict[str, Any], mu
     b_aggs = baseline.get("aggregations", {})
     current_tokens = (aggs.get("token_sum", {}).get("value", 0) or 0) + (aggs.get("token_output_sum", {}).get("value", 0) or 0)
     baseline_tokens = (b_aggs.get("token_sum", {}).get("value", 0) or 0) + (b_aggs.get("token_output_sum", {}).get("value", 0) or 0)
-    if baseline_tokens <= 0 or current_tokens <= baseline_tokens * multiplier:
-        return None
-    ratio = round(current_tokens / max(1, baseline_tokens), 2)
+    baseline_available = baseline_tokens > 0
+    if baseline_available:
+        if current_tokens <= baseline_tokens * multiplier:
+            return None
+        ratio = round(current_tokens / max(1, baseline_tokens), 2)
+        phenomenon = f"Token consumption is {ratio}x the baseline ({current_tokens:,.0f} vs {baseline_tokens:,.0f} baseline tokens in comparable windows)."
+    else:
+        if current_tokens < NO_BASELINE_TOKEN_THRESHOLD:
+            return None
+        ratio = round(current_tokens / NO_BASELINE_TOKEN_THRESHOLD, 2)
+        phenomenon = f"Token consumption is {current_tokens:,.0f} tokens with no usable baseline (absolute threshold: {NO_BASELINE_TOKEN_THRESHOLD:,.0f})."
     top_tools = _extract_value_terms(aggs.get("top_token_tools", {}), value_agg="token_sum")
     top_models = _extract_value_terms(aggs.get("top_token_models", {}), value_agg="token_sum")
     # Prefer the session ranked by token consumption; fall back to the retry
@@ -347,12 +358,13 @@ def _analyze_token_anomaly(current: dict[str, Any], baseline: dict[str, Any], mu
     return {
         "alert_type": "token_consumption_anomaly",
         "severity": "warning" if ratio < 5 else "critical",
-        "phenomenon": f"Token consumption is {ratio}x the baseline ({current_tokens:,.0f} vs {baseline_tokens:,.0f} baseline tokens in comparable windows).",
+        "phenomenon": phenomenon,
         "root_cause": f"Tool `{primary_tool}` with model `{primary_model}` is the top consumer; session `{primary_session}` is the top token-burning session. This could indicate {'a retry storm or looped turn' if ratio > 5 else 'increased workload or prompt bloat'}.",
         "recommendation": f"1. Check whether `{primary_tool}` is re-entering the same turn repeatedly. 2. Review recent prompt changes for `{primary_model}`. 3. Consider adding a per-turn token budget or circuit breaker for session `{primary_session}`.",
         "evidence": {
             "current_tokens": current_tokens,
             "baseline_tokens": baseline_tokens,
+            "baseline_available": baseline_available,
             "ratio": ratio,
             "top_tools": top_tools,
             "top_models": top_models,
@@ -806,8 +818,9 @@ def _write_alert_to_es(config: ESConfig, index_prefix: str, result: dict[str, An
 
     def _write(doc: dict[str, Any]) -> None:
         doc.setdefault("event.dataset", "internal.alert_check")
+        doc_id = f"alert-check-{uuid.uuid4().hex}"
         try:
-            es_request(config, "POST", f"/{events_ds}/_create", doc)
+            es_request(config, "POST", f"/{events_ds}/_create/{doc_id}", doc)
         except SkillError as exc:
             print(f"⚠️ failed to write alert to ES: {exc}", file=sys.stderr)
 
@@ -927,17 +940,21 @@ def _store_to_insight(*, store_script: str, result: dict[str, Any], es_url: str,
 
 def _print_crontab(args: Any) -> None:
     """Print a ready-to-use crontab entry for scheduling this check."""
+
+    def _arg(flag: str, value: Any) -> str:
+        return f"{flag} {shlex.quote(str(value))}"
+
     cmd_parts = [
         "python scripts/alert_and_diagnose.py",
-        f"--es-url {args.es_url}",
-        f"--index-prefix {args.index_prefix}",
-        f"--time-range {args.time_range}",
+        _arg("--es-url", args.es_url),
+        _arg("--index-prefix", args.index_prefix),
+        _arg("--time-range", args.time_range),
     ]
     if args.es_user:
-        cmd_parts.append(f"--es-user {args.es_user}")
-        cmd_parts.append("--es-password $ALERT_ES_PASSWORD")
+        cmd_parts.append('--es-user "$ALERT_ES_USER"')
+        cmd_parts.append('--es-password "$ALERT_ES_PASSWORD"')
     if args.webhook_url:
-        cmd_parts.append(f"--webhook-url {args.webhook_url}")
+        cmd_parts.append(_arg("--webhook-url", args.webhook_url))
     if args.write_to_es:
         cmd_parts.append("--write-to-es")
     cmd = " ".join(cmd_parts)

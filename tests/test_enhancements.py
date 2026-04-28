@@ -7,6 +7,7 @@
 5. Store-to-insight — verify alert → insight-store bridge
 """
 
+import io
 import json
 import sys
 import tempfile
@@ -499,6 +500,16 @@ class AlertDiagnoseLogicTests(unittest.TestCase):
         self.assertEqual(result["evidence"]["primary_session_source"], "retry_fallback")
         self.assertIn("session-retry", result["root_cause"])
 
+    def test_token_anomaly_uses_absolute_threshold_when_baseline_empty(self) -> None:
+        result = alert_and_diagnose._analyze_token_anomaly(
+            self._make_current(tokens=75_000),
+            self._make_baseline(tokens=0),
+            multiplier=3.0,
+        )
+        self.assertIsNotNone(result)
+        self.assertFalse(result["evidence"]["baseline_available"])
+        self.assertIn("no usable baseline", result["phenomenon"])
+
     def test_internal_dataset_filter_excludes_all_internal_streams(self) -> None:
         """Every query against the events stream must filter out internal.*.
 
@@ -511,6 +522,25 @@ class AlertDiagnoseLogicTests(unittest.TestCase):
         self.assertEqual(len(must_not), 1)
         clause = must_not[0]
         self.assertEqual(clause.get("prefix", {}).get("event.dataset"), "internal.")
+
+    def test_crontab_output_uses_env_for_credentials_and_quotes_values(self) -> None:
+        args = type("Args", (), {
+            "es_url": "https://es.example.com:9200/path with spaces",
+            "index_prefix": "agent-obsv",
+            "time_range": "now-15m",
+            "es_user": "elastic user",
+            "webhook_url": "https://hooks.example.com/a b",
+            "write_to_es": True,
+        })()
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            alert_and_diagnose._print_crontab(args)
+        text = out.getvalue()
+        self.assertIn('--es-user "$ALERT_ES_USER"', text)
+        self.assertIn('--es-password "$ALERT_ES_PASSWORD"', text)
+        self.assertNotIn("elastic user", text)
+        self.assertIn("'https://es.example.com:9200/path with spaces'", text)
+        self.assertIn("'https://hooks.example.com/a b'", text)
 
     def test_latency_degradation_triggers(self) -> None:
         result = alert_and_diagnose._analyze_latency_degradation(

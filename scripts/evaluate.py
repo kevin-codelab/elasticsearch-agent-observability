@@ -27,10 +27,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from common import (
     ESConfig,
@@ -244,6 +248,23 @@ def _eval_guardrail_block_rate(current: dict, baseline: dict) -> dict[str, Any]:
     return {"outcome": outcome, "score": round(1 - rate, 2), "detail": f"Guardrail block rate: {rate:.1%} ({blocked}/{total})"}
 
 
+def _build_llm_judge_url(llm_endpoint: str) -> str:
+    endpoint = llm_endpoint.strip().rstrip("/")
+    if not endpoint:
+        return ""
+    parsed = urlsplit(endpoint)
+    path = parsed.path.rstrip("/")
+    if path.endswith("/v1/chat/completions"):
+        final_path = path
+    elif path.endswith("/v1"):
+        final_path = f"{path}/chat/completions"
+    elif path:
+        final_path = f"{path}/v1/chat/completions"
+    else:
+        final_path = "/v1/chat/completions"
+    return urlunsplit((parsed.scheme, parsed.netloc, final_path, "", ""))
+
+
 def _eval_llm_judge(current: dict, baseline: dict, *, config: ESConfig | None = None, index_prefix: str = "", time_range: str = "", llm_endpoint: str = "", llm_model: str = "", llm_api_key: str = "") -> dict[str, Any]:
     """LLM-as-Judge: sample recent traces from ES, send to an OpenAI-compatible
     API for quality scoring.
@@ -301,8 +322,6 @@ def _eval_llm_judge(current: dict, baseline: dict, *, config: ESConfig | None = 
     )
 
     # Call the LLM endpoint
-    import urllib.request
-    import urllib.error
     model_name = llm_model or "gpt-4o-mini"
     body = json.dumps({
         "model": model_name,
@@ -312,7 +331,7 @@ def _eval_llm_judge(current: dict, baseline: dict, *, config: ESConfig | None = 
     }).encode("utf-8")
 
     req = urllib.request.Request(
-        llm_endpoint.rstrip("/") + "/v1/chat/completions" if "/v1/" not in llm_endpoint else llm_endpoint,
+        _build_llm_judge_url(llm_endpoint),
         data=body,
         method="POST",
     )
@@ -336,7 +355,6 @@ def _eval_llm_judge(current: dict, baseline: dict, *, config: ESConfig | None = 
     except (KeyError, IndexError, json.JSONDecodeError, ValueError):
         # Fallback: try to extract a number
         content = str(result.get("choices", [{}])[0].get("message", {}).get("content", ""))
-        import re
         numbers = re.findall(r"\b(\d+(?:\.\d+)?)\b", content)
         llm_score = float(numbers[0]) if numbers else 5.0
         rationale = content[:200]
@@ -468,7 +486,8 @@ def _write_eval_results(config: ESConfig, index_prefix: str, report: dict[str, A
             "message": f"[{r['outcome'].upper()}] {r['evaluator']}: {r.get('detail', '')}",
         }
         try:
-            es_request(config, "POST", f"/{ds_name}/_create", doc)
+            doc_id = f"{r['run_id']}-{r['evaluator']}-{uuid.uuid4().hex}"
+            es_request(config, "POST", f"/{ds_name}/_create/{doc_id}", doc)
         except SkillError as exc:
             print(f"⚠️ eval write failed ({r['evaluator']}): {exc}", file=sys.stderr)
 

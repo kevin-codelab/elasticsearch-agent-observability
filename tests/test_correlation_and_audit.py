@@ -147,9 +147,9 @@ class SkillAuditTests(unittest.TestCase):
                 evidence={"healthz": "pass", "canary": "pass"},
             )
         self.assertTrue(ok)
-        # Data-stream contract: must use _create, not _doc.
+        # Data-stream contract: must use _create with an explicit document id.
         self.assertEqual(captured["method"], "POST")
-        self.assertTrue(captured["path"].endswith("/agent-obsv-events/_create"))
+        self.assertRegex(captured["path"], r"/agent-obsv-events/_create/skill-audit-[0-9a-f]+$")
         doc = captured["payload"]
         # Must carry internal.* dataset so aggregations filter it out.
         self.assertEqual(doc["event.dataset"], common.SKILL_AUDIT_DATASET)

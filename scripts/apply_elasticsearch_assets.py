@@ -9,6 +9,7 @@ import json
 import sys
 import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -57,12 +58,12 @@ def sanity_check(config: ESConfig, *, index_prefix: str) -> dict[str, Any]:
         "gen_ai.operation.name": "sanity_check",
         "message": "End-to-end sanity check document",
     }
-    doc_id = ""
+    doc_id = f"sanity-{uuid.uuid4().hex}"
     try:
-        index_result = es_request(config, "POST", f"/{ds_name}/_doc", test_doc)
-        doc_id = index_result.get("_id", "")
-        if not doc_id:
-            return {"status": "failed", "reason": "Index returned no _id", "detail": index_result}
+        index_result = es_request(config, "POST", f"/{ds_name}/_create/{doc_id}", test_doc)
+        indexed_id = index_result.get("_id", doc_id)
+        if indexed_id != doc_id:
+            return {"status": "failed", "reason": "Index returned unexpected _id", "doc_id": doc_id, "detail": index_result}
         es_request(config, "POST", f"/{ds_name}/_refresh")
         query = {"query": {"term": {"event.action": "_sanity_check"}}, "size": 1}
         search_result = es_request(config, "POST", f"/{ds_name}/_search", query)

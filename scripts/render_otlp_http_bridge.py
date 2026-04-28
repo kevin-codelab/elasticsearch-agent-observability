@@ -157,19 +157,45 @@ def _decode_protobuf_payload(body: bytes, *, signal: str) -> dict[str, Any]:
     return MessageToDict(message, preserving_proto_field_name=True)
 
 
+def _is_sensitive_key(key: str) -> bool:
+    normalized = str(key or "").strip()
+    if not normalized:
+        return False
+    leaf = normalized.rsplit(".", 1)[-1]
+    return normalized in _REDACT_KEYS or normalized in _REDACT_ALIASES or leaf in _REDACT_ALIASES
+
+
+def _redact_payload(value: Any, path: tuple[str, ...] = ()) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {{}}
+        for raw_key, nested in value.items():
+            key = str(raw_key)
+            dotted_path = ".".join((*path, key))
+            if _is_sensitive_key(key) or _is_sensitive_key(dotted_path):
+                continue
+            redacted[key] = _redact_payload(nested, (*path, key))
+        return redacted
+    if isinstance(value, list):
+        return [_redact_payload(item, path) for item in value]
+    return value
+
+
 def _coerce_message(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
         return value
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    redacted = _redact_payload(value)
+    if redacted != value:
+        return "[redacted sensitive GenAI payload]"
+    return json.dumps(redacted, ensure_ascii=False, sort_keys=True)
 
 
 def _apply_attributes(document: dict[str, Any], attributes: dict[str, Any]) -> None:
     for key, value in attributes.items():
-        if not key or value is None or key in document or key in _REDACT_KEYS:
+        if not key or value is None or key in document or _is_sensitive_key(key):
             continue
-        document[key] = value
+        document[key] = _redact_payload(value, (str(key),))
 
 
 def _status_to_outcome(status: Any) -> str | None:
@@ -220,7 +246,8 @@ def _iter_log_documents(payload: dict[str, Any]) -> list[dict[str, Any]]:
             for record in scope_block.get("logRecords", []):
                 record_attributes = _collect_attributes(record.get("attributes", []))
                 merged = _merge_attributes(resource_attributes, scope_attributes, record_attributes)
-                body = _parse_any_value(record.get("body"))
+                raw_body = _parse_any_value(record.get("body"))
+                body = _redact_payload(raw_body)
                 document = {{
                     "@timestamp": _ns_to_iso(record.get("timeUnixNano") or record.get("time_unix_nano") or record.get("observedTimeUnixNano") or record.get("observed_time_unix_nano")),
                     "observer.ingest_path": "otlphttpbridge",
@@ -244,7 +271,7 @@ def _iter_log_documents(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 span_id = str(record.get("spanId") or record.get("span_id") or "").strip()
                 if span_id:
                     document["span.id"] = span_id.lower()
-                message = _coerce_message(body)
+                message = _coerce_message(raw_body)
                 if message:
                     document["message"] = message
                 if not isinstance(body, str) and body is not None:
