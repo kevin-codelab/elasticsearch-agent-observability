@@ -551,6 +551,38 @@ _LENS_LAYER_REF_PREFIX = "indexpattern-datasource-layer-"
 _LENS_DATASOURCE_KEY = "formBased"
 
 
+def _kibana_field_type(es_type: str) -> str:
+    if es_type in {"long", "integer", "short", "byte", "float", "half_float", "scaled_float", "double"}:
+        return "number"
+    if es_type == "date":
+        return "date"
+    if es_type == "boolean":
+        return "boolean"
+    return "string"
+
+
+def _build_data_view_fields() -> str:
+    fields = []
+    for name, mapping in sorted(_ecs_base_properties().items()):
+        es_type = str(mapping.get("type", "keyword"))
+        kibana_type = _kibana_field_type(es_type)
+        searchable = es_type not in {"object", "nested", "flattened"}
+        aggregatable = es_type not in {"text", "object", "nested", "flattened"}
+        fields.append(
+            {
+                "name": name,
+                "type": kibana_type,
+                "esTypes": [es_type],
+                "count": 0,
+                "scripted": False,
+                "searchable": searchable,
+                "aggregatable": aggregatable,
+                "readFromDocValues": aggregatable,
+            }
+        )
+    return json.dumps(fields, ensure_ascii=False, separators=(",", ":"))
+
+
 def _build_lens_state(*, columns: dict[str, Any], column_order: list[str], visualization: dict[str, Any], layer_id: str = DEFAULT_LENS_LAYER_ID, query: str = "") -> dict[str, Any]:
     return {
         "adHocDataViews": {},
@@ -970,6 +1002,7 @@ def build_kibana_saved_objects(index_prefix: str, *, extensions: list[dict[str, 
                 "title": f"{ds_name}*",
                 "name": "Agent observability events",
                 "timeFieldName": "@timestamp",
+                "fields": _build_data_view_fields(),
             },
         },
         # --- Saved searches ---

@@ -41,7 +41,7 @@ EXPECTED_DIGESTS = {
     "index_template": "9719b3e5ab7fb2f031e707a5a63d1a980ecf8077fdd4c24116cb64d6875bf392",
     "ingest_pipeline": "26f780f60ac8724aa871eba569ae48ab686d8fc3e852aced5ccb3c69244e6de0",
     "investigation_queries": "5fbf6befadd53cf7942e22ea5422e63a8ec5d81bd84dc33c41e968251c81e8c1",
-    "kibana_saved_objects": "da24e99b32a9890238aaf53f45e5302bbd8811ccfcd1a568b96a7f4bfe835d96",
+    "kibana_saved_objects": "34d0cc822403c0c514e33e8bf2d9ea5f68ac1c0d99039c9917be3663ae071643",
     "node_instrumentation": "20717f8a96fabc77e2789442ad9c577ad330015546094a72f21d9bc2a60ff7c3",
     "python_instrumentation": "e86d56c10516b253c954566d65b8af8f82165a2dfeb0b1c2fa4f0350ce9de198",
     "report_config": "0bcd132323bd88310b53518197f476d40003566388ec4c7ccae476d72514ae70",

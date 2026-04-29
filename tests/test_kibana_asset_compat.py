@@ -47,6 +47,29 @@ class KibanaAssetCompatibilityTests(unittest.TestCase):
             self.assertIn("indexpattern-datasource-layer-layer1", references)
             self.assertIn(obj["attributes"].get("visualizationType"), {"lnsXY", "lnsMetric", "lnsPie", "lnsDatatable"})
 
+    def test_data_view_carries_field_cache_for_lens_panels(self) -> None:
+        bundle = render_es_assets.build_kibana_saved_objects("agent-obsv")
+        data_view = next(obj for obj in bundle["objects"] if obj["type"] == "index-pattern")
+        fields = {item["name"]: item for item in json.loads(data_view["attributes"]["fields"])}
+
+        self.assertEqual(fields["@timestamp"]["type"], "date")
+        self.assertTrue(fields["gen_ai.usage.input_tokens"]["aggregatable"])
+        self.assertTrue(fields["gen_ai.agent_ext.latency_ms"]["aggregatable"])
+        self.assertFalse(fields["message"]["aggregatable"])
+
+    def test_lens_source_fields_exist_in_data_view_cache(self) -> None:
+        bundle = render_es_assets.build_kibana_saved_objects("agent-obsv")
+        data_view = next(obj for obj in bundle["objects"] if obj["type"] == "index-pattern")
+        data_view_fields = {item["name"] for item in json.loads(data_view["attributes"]["fields"])}
+
+        for obj in [item for item in bundle["objects"] if item["type"] == "lens"]:
+            layers = obj["attributes"]["state"]["datasourceStates"]["formBased"]["layers"]
+            for layer in layers.values():
+                for column in layer["columns"].values():
+                    source_field = column.get("sourceField")
+                    if source_field:
+                        self.assertIn(source_field, data_view_fields, f"{obj['id']} references missing field {source_field}")
+
     def test_rendered_ndjson_saved_objects_are_line_delimited_json(self) -> None:
         discovery = {"detected_modules": [{"module_kind": "tool_registry"}], "files_scanned": 1}
         with tempfile.TemporaryDirectory() as tmp_dir:

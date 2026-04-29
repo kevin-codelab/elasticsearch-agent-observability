@@ -88,9 +88,9 @@ class ApplyAndBootstrapTests(unittest.TestCase):
             def fake_es_request(config, method, path, payload=None):
                 return {"acknowledged": True}
 
-            def fake_kibana_request(config, kibana_url, method, path, payload=None, *, body_bytes=None):
-                kibana_calls.append((method, path, payload))
-                return {"id": path.rsplit("/", 1)[-1]}
+            def fake_kibana_request(config, kibana_url, method, path, payload=None, *, body_bytes=None, content_type="application/json"):
+                kibana_calls.append((method, path, payload, body_bytes, content_type))
+                return {"success": True, "successCount": 2}
 
             with mock.patch.object(apply_elasticsearch_assets, "es_request", side_effect=fake_es_request):
                 with mock.patch.object(apply_elasticsearch_assets, "kibana_request", side_effect=fake_kibana_request):
@@ -106,8 +106,35 @@ class ApplyAndBootstrapTests(unittest.TestCase):
 
         self.assertEqual(summary["kibana"]["status"], "applied")
         self.assertEqual(summary["kibana"]["count"], 2)
-        self.assertTrue(any(path.startswith("/api/saved_objects/index-pattern/agent-obsv-events-view") for _, path, _ in kibana_calls))
-        self.assertTrue(any(path.startswith("/api/saved_objects/search/agent-obsv-event-stream") for _, path, _ in kibana_calls))
+        self.assertEqual(len(kibana_calls), 1)
+        method, path, _payload, body, content_type = kibana_calls[0]
+        self.assertEqual(method, "POST")
+        self.assertEqual(path, "/api/saved_objects/_import?overwrite=true&compatibilityMode=true")
+        self.assertIsNotNone(body)
+        self.assertIn("multipart/form-data", content_type)
+        self.assertIn(b'"type":"index-pattern"', body)
+        self.assertIn(b'"id":"agent-obsv-event-stream"', body)
+
+    def test_apply_kibana_saved_objects_surfaces_import_errors(self) -> None:
+        bundle = {
+            "objects": [
+                {"type": "dashboard", "id": "agent-obsv-overview", "attributes": {"title": "Overview"}},
+            ],
+        }
+
+        def fake_kibana_request(config, kibana_url, method, path, payload=None, *, body_bytes=None, content_type="application/json"):
+            return {"success": False, "errors": [{"id": "agent-obsv-overview", "type": "dashboard", "error": {"message": "bad refs"}}]}
+
+        with mock.patch.object(apply_elasticsearch_assets, "kibana_request", side_effect=fake_kibana_request):
+            with self.assertRaises(apply_elasticsearch_assets.SkillError) as ctx:
+                apply_elasticsearch_assets.apply_kibana_saved_objects(
+                    ESConfig(es_url="http://localhost:9200"),
+                    kibana_url="http://localhost:5601",
+                    kibana_space="default",
+                    bundle=bundle,
+                )
+
+        self.assertIn("bad refs", str(ctx.exception))
 
     def test_apply_assets_reports_native_preflight_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -133,7 +160,7 @@ class ApplyAndBootstrapTests(unittest.TestCase):
             def fake_es_request(config, method, path, payload=None):
                 return {"acknowledged": True}
 
-            def fake_kibana_request(config, kibana_url, method, path, payload=None, *, body_bytes=None):
+            def fake_kibana_request(config, kibana_url, method, path, payload=None, *, body_bytes=None, content_type="application/json"):
                 if path == "/api/status":
                     return {"status": {"overall": {"level": "available", "summary": "ok"}}}
                 if path.startswith("/api/fleet/agent_policies"):
@@ -368,7 +395,7 @@ class ApplyAndBootstrapTests(unittest.TestCase):
         paths = [step["path"] for step in summary["plan"]]
         self.assertTrue(any("_ilm/policy" in p for p in paths))
         self.assertTrue(any("_data_stream" in p for p in paths))
-        self.assertTrue(any("saved_objects" in p for p in paths))
+        self.assertTrue(any("saved_objects/_import" in p for p in paths))
 
     def test_apply_assets_dry_run_can_preview_kibana_without_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -389,7 +416,7 @@ class ApplyAndBootstrapTests(unittest.TestCase):
                 dry_run=True,
             )
         paths = [step["path"] for step in summary["plan"]]
-        self.assertTrue(any(path.endswith("/api/saved_objects/search/test-search") for path in paths))
+        self.assertTrue(any(path.endswith("/api/saved_objects/_import?overwrite=true&compatibilityMode=true") for path in paths))
 
     def test_apply_assets_dry_run_can_preview_native_checks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

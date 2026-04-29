@@ -408,10 +408,19 @@ def inspect_native_assets(
     }
 
 
-def kibana_request(config: ESConfig, kibana_url: str, method: str, path: str, payload: dict | None = None, *, body_bytes: bytes | None = None) -> dict[str, Any]:
+def kibana_request(
+    config: ESConfig,
+    kibana_url: str,
+    method: str,
+    path: str,
+    payload: dict | None = None,
+    *,
+    body_bytes: bytes | None = None,
+    content_type: str = "application/json",
+) -> dict[str, Any]:
     url = kibana_url.rstrip("/") + path
     request = urllib.request.Request(url, method=method.upper())
-    request.add_header("Content-Type", "application/json")
+    request.add_header("Content-Type", content_type)
     request.add_header("kbn-xsrf", "true")
     if config.kibana_api_key:
         request.add_header("Authorization", f"ApiKey {config.kibana_api_key}")
@@ -443,6 +452,19 @@ def build_space_prefix(space: str) -> str:
     return "" if normalized == "default" else f"/s/{quote(normalized, safe='')}"
 
 
+def _encode_kibana_import_body(objects: list[dict[str, Any]]) -> tuple[bytes, str]:
+    boundary = f"agent-obsv-{uuid.uuid4().hex}"
+    ndjson = "\n".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) for item in objects) + "\n"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="kibana-saved-objects.ndjson"\r\n'
+        "Content-Type: application/ndjson\r\n\r\n"
+        f"{ndjson}"
+        f"\r\n--{boundary}--\r\n"
+    ).encode("utf-8")
+    return body, f"multipart/form-data; boundary={boundary}"
+
+
 def ensure_data_stream(config: ESConfig, index_prefix: str) -> dict[str, str]:
     ds_name = build_data_stream_name(index_prefix)
     status = "created"
@@ -466,26 +488,30 @@ def apply_kibana_saved_objects(config: ESConfig, *, kibana_url: str, kibana_spac
     if not objects:
         return {"status": "skipped", "count": 0, "objects": []}
     space_prefix = build_space_prefix(kibana_space)
-    applied: list[dict[str, str]] = []
     for saved_object in objects:
         object_type = str(saved_object.get("type", "")).strip()
         object_id = str(saved_object.get("id", "")).strip()
         if not object_type or not object_id:
             raise SkillError("Each Kibana saved object must include type and id")
-        payload = {
-            "attributes": saved_object.get("attributes", {}),
-            "references": saved_object.get("references", []),
+
+    body, content_type = _encode_kibana_import_body(objects)
+    path = f"{space_prefix}/api/saved_objects/_import?overwrite=true&compatibilityMode=true"
+    response = kibana_request(config, kibana_url, "POST", path, body_bytes=body, content_type=content_type)
+    errors = response.get("errors") if isinstance(response, dict) else None
+    if errors:
+        detail = json.dumps(errors, ensure_ascii=False)[:1000]
+        raise SkillError(f"Kibana saved object import failed: {detail}")
+    if isinstance(response, dict) and response.get("success") is False:
+        raise SkillError(f"Kibana saved object import failed: {json.dumps(response, ensure_ascii=False)[:1000]}")
+
+    applied = [
+        {
+            "type": str(saved_object.get("type", "")),
+            "id": str(saved_object.get("id", "")),
+            "title": str(saved_object.get("attributes", {}).get("title", saved_object.get("id", ""))),
         }
-        path = f"{space_prefix}/api/saved_objects/{quote(object_type, safe='')}/{quote(object_id, safe='')}?overwrite=true"
-        response = kibana_request(config, kibana_url, "POST", path, payload)
-        applied.append(
-            {
-                "type": object_type,
-                "id": object_id,
-                "title": str(saved_object.get("attributes", {}).get("title", object_id)),
-                "response_id": str(response.get("id", object_id)),
-            }
-        )
+        for saved_object in objects
+    ]
     return {
         "status": "applied",
         "space": kibana_space,
@@ -533,8 +559,12 @@ def apply_assets(
             plan.append({"action": "PUT", "path": f"/_data_stream/{build_data_stream_name(validated_prefix)}", "asset": "data_stream"})
         if apply_kibana and assets.get("kibana_saved_objects"):
             objects = assets["kibana_saved_objects"].get("objects", [])
-            for obj in objects:
-                plan.append({"action": "POST", "path": f"/api/saved_objects/{obj.get('type')}/{obj.get('id')}", "asset": f"kibana:{obj.get('type')}"})
+            if objects:
+                plan.append({
+                    "action": "POST",
+                    "path": "/api/saved_objects/_import?overwrite=true&compatibilityMode=true",
+                    "asset": f"kibana:saved_objects:{len(objects)}",
+                })
         if assets.get("investigation_queries"):
             plan.append({"action": "REFERENCE", "path": "investigation-queries.json", "asset": "elastic:esql_investigation_pack"})
         if assets.get("alert_rule_specs"):
