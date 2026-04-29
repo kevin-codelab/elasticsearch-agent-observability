@@ -372,6 +372,17 @@ class ContractsAndSecurityTests(unittest.TestCase):
         relative = {path.relative_to(root).as_posix() for path in files}
         self.assertEqual(relative, {"app/agent.py"})
 
+    def test_iter_text_files_does_not_ignore_workspace_because_of_parent_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir) / "tests" / "agent-workspace"
+            (workspace / "app").mkdir(parents=True)
+            (workspace / "app" / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+
+            files = common.iter_text_files(workspace, max_files=20)
+
+        relative = {path.relative_to(workspace).as_posix() for path in files}
+        self.assertEqual(relative, {"app/agent.py"})
+
     def test_report_latency_converts_ns_to_ms(self) -> None:
         """Verify that build_report properly converts event.duration (ns) to ms."""
         mock_result = {

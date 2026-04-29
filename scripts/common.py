@@ -203,11 +203,13 @@ def asset_names(index_prefix: str) -> dict[str, str]:
 
 
 def iter_text_files(workspace: Path, max_files: int = 400, max_bytes: int = 200_000) -> list[Path]:
+    workspace = workspace.expanduser()
     discovered: list[Path] = []
     for path in workspace.rglob("*"):
         if len(discovered) >= max_files:
             break
-        if any(part in IGNORE_DIR_NAMES for part in path.parts):
+        relative_parts = path.relative_to(workspace).parts
+        if any(part in IGNORE_DIR_NAMES for part in relative_parts[:-1]):
             continue
         if not path.is_file():
             continue
